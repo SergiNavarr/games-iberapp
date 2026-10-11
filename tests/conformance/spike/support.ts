@@ -297,9 +297,11 @@ export function instrumentListeners() {
     return origRemove.call(this, type, fn, opts);
   } as typeof proto.removeEventListener;
   const strip = (a: Active) => ({ id: a.id, target: a.target, type: a.type, capture: a.capture, stack: a.stack });
+  // types: event types to report; ["*"] reports every type (C03 b counts any new listener).
+  const matches = (types: string[], type: string) => types.includes("*") || types.includes(type);
   (window as unknown as JudgeWindow).__judge = {
     snapshot: () => [nextId],
-    activeSince: (snap, types) => active.filter((a) => a.id >= snap[0] && types.includes(a.type)).map(strip),
-    addCallsSince: (snap, types) => adds.filter((a) => a.id >= snap[0] && types.includes(a.type)).map(strip),
+    activeSince: (snap, types) => active.filter((a) => a.id >= snap[0] && matches(types, a.type)).map(strip),
+    addCallsSince: (snap, types) => adds.filter((a) => a.id >= snap[0] && matches(types, a.type)).map(strip),
   };
 }

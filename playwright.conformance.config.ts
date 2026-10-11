@@ -52,5 +52,17 @@ export default defineConfig({
       },
     },
     { name: "start", testMatch: /spike[\\/]s9-.*\.spec\.ts$/, use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL } },
+    // T3 + T4 (checklist §2.6, items W, against _dummy): everything on next dev except C02 and C31, which look for the
+    // Phaser chunk in response bodies and run on next start (dev chunks keep comments).
+    {
+      name: "contract-dev",
+      testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL },
+    },
+    {
+      name: "contract-start",
+      testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL },
+    },
   ],
 });

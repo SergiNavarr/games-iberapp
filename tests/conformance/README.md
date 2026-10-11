@@ -25,3 +25,21 @@ npx playwright test -c playwright.conformance.config.ts
 - `@c09-c12-extra`: partes de C09–C12 que el resumen de S6 en el ticket no enumera (búsqueda `addKeys\(.*true`, Escape, rueda fuera del canvas, `touchAction`). **Cuentan para el veredicto** (confirmado por el coordinador el 11/10/2026: S6 = C09–C12 completos).
 - S5 usa la redacción corregida el 11/10/2026: solo cuentan los mensajes de consola de tipo `warning` o `error` y los `pageerror` que contengan `WebGL` o `context lost`, sin distinguir mayúsculas. El banner de Phaser (`console.log`) no cuenta.
 - Resultados en `tests/.results/conformance/` (ignorado por git).
+
+## T3 + T4 · contrato, wrapper y dummy (checklist §2.6, ítems W)
+
+Contra `/conformance/_dummy` (C31 contra `dark-sky` y `night-voices`), con la interfaz fija del ticket T3+T4 y sus "Precisiones de interfaz". También vuelve a correr la suite de T2 (regresión).
+
+| ID | Dónde | Cómo se corre |
+| --- | --- | --- |
+| C01 | comandos directos | `npm run lint`, `npm run build` y después `npx tsc --noEmit` (salida 0) |
+| C03(a), C04, C09(a), C13(a), C14(a), C15, C17(a), C20(a) | `contract/c00-static.spec.ts` | búsquedas literales de §2.6 sobre `lib/games/_dummy/` y `lib/games/shared/` (C20 a: solo `_dummy/`) |
+| C02, C31 | `contract/c02-…`, `contract/c31-…` | proyecto `contract-start` (`next start`, 3008): buscan Phaser en el cuerpo de las respuestas JS |
+| Resto de los W | `contract/c03…c32-*.spec.ts` | proyecto `contract-dev` (`next dev`, 3007) |
+
+- Los módulos del codificador (`contract.ts`, `_dummy/meta.ts`, `game-progress.ts`) se cargan en tiempo de ejecución con `require` por ruta (Playwright los transpila y resuelve `@/`). No hay imports estáticos: si cambia un export, no se rompe el `tsc` ni el build (C01).
+- **C06/S4:** cada caso en frío y con el módulo precargado (`raw.importOnly()`). "Ningún callback después de `destroy()`" se mide desde el último `destroyed` posterior a la llamada. Los callbacks son `ready`, `progress`, `announce`, `complete` y `error`.
+- **C08b/C08c:** la ventana de 1 s arranca 250 ms después del disparo. Las capturas del canvas se toman por CDP (`captureBeyondViewport`), así que funcionan con el escenario fuera del viewport sin hacer scroll; no disparan el IntersectionObserver. Antes de cada pausa, un `[control]` comprueba que sin pausa el canvas se mueve. La pestaña oculta se simula redefiniendo `document.visibilityState`/`hidden` y despachando `visibilitychange`.
+- **C21, C23, C23b:** los assets "presentes" son WebP reales generados con el encoder del navegador, con las medidas exactas del manifiesto, servidos con `route.fulfill`. Las texturas se leen con `debugTextures()`: `source` es `file` si el asset está presente, `placeholder` si falta y `scaled` si tiene otras medidas.
+- **C30:** (a) una entrada sembrada con menos aciertos queda reemplazada; (b) en un empate gana el último; (c) `pickBest` en Node conserva un resultado mejor ya guardado (el dummy no puede terminar con menos aciertos).
+- **Validación de la suite (11/10/2026):** contra un doble de la interfaz fija (fuera del repo), la versión correcta pasa los 65 tests de `contract/`. De 32 defectos inyectados se detectan 31. El que no se detecta es "destroy no quita el canvas": C08 no lo ve porque desmontar el `GameStage` se lleva el escenario, pero lo detecta C05 por el camino `raw`.
