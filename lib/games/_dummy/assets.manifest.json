@@ -1,0 +1,28 @@
+[
+  {
+    "key": "target",
+    "file": "target.webp",
+    "type": "image",
+    "width": 128,
+    "height": 128,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 12,
+    "placeholder": "círculo yellow de 128 px",
+    "use": "objetivo tocable"
+  },
+  {
+    "key": "ripple",
+    "file": "ripple.webp",
+    "type": "spritesheet",
+    "width": 576,
+    "height": 96,
+    "format": "webp",
+    "alpha": true,
+    "frames": { "count": 6, "frameWidth": 96, "frameHeight": 96, "fps": 8, "loop": true },
+    "maxKB": 24,
+    "placeholder": "círculo sky de 96 px",
+    "use": "onda ambiental animada (decoración, se detiene con movimiento reducido)"
+  }
+]
