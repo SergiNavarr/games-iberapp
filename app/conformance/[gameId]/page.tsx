@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { BENCH_IDS } from "@/components/harness/bench-games";
 import { ConformanceBench } from "@/components/harness/ConformanceBench";
 
-// HARNESS (T4): /conformance/<gameId>?seed=<n>&testHooks=1&reducedMotion=0|1 is a fixed contract with the judge's tests.
+// HARNESS (T4, E1): /conformance/<gameId>?seed=<n>&testHooks=1&reducedMotion=0|1&difficulty=<id>&timeScale=<n> is a fixed
+// contract with the judge's tests. timeScale only reaches the game with testHooks=1.
 export const metadata: Metadata = { title: "Banco de conformidad · Minijuegos" };
 
 const one = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
@@ -15,12 +16,16 @@ export default async function ConformancePage({ params, searchParams }: PageProp
   const seedParam = one(query.seed);
   const seed = seedParam !== undefined && Number.isFinite(Number(seedParam)) ? Number(seedParam) : undefined;
   const motion = one(query.reducedMotion);
+  const scaleParam = one(query.timeScale);
+  const timeScale = scaleParam !== undefined && Number(scaleParam) > 0 ? Number(scaleParam) : undefined;
   return (
     <ConformanceBench
       initialGameId={gameId}
       seed={seed}
       testHooks={one(query.testHooks) === "1"}
       reducedMotion={motion === "1" ? true : motion === "0" ? false : undefined}
+      difficulty={one(query.difficulty)}
+      timeScale={timeScale}
     />
   );
 }

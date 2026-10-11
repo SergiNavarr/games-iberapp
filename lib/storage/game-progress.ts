@@ -2,8 +2,9 @@ import { useSyncExternalStore } from "react";
 import { progressEntrySchema, type GameResult, type ProgressEntry } from "@/lib/games/contract";
 import { createLocalStore } from "@/lib/storage/local-store";
 
-// Minigame progress (plan §2.2, P1): localStorage["ibera-games-progress"] = { [gameId]: { completed, hits, total, savedAt } }.
-// Only GameStage writes it, after onComplete; the games never touch storage.
+// Minigame progress (plan §2.2, P1, E1): localStorage["ibera-games-progress"] = { [gameId]: { completed, hits, total, score, savedAt } }.
+// One entry per game, whatever the difficulty played. Only GameStage writes it, with the final result (onComplete or
+// the review's onDone); the games never touch storage.
 export const PROGRESS_KEY = "ibera-games-progress";
 
 export type GameProgress = Record<string, ProgressEntry>;
@@ -29,15 +30,15 @@ const readValid = (): GameProgress => {
 };
 const EMPTY: GameProgress = {};
 
-/** The result to keep (P1): more hits wins; on a tie, the latest (`next`). Pure. */
+/** The result to keep (P1, E1): more score wins; on a tie, the latest (`next`). Pure. */
 export function pickBest(previous: ProgressEntry | undefined, next: ProgressEntry): ProgressEntry {
-  return previous && previous.hits > next.hits ? previous : next;
+  return previous && previous.score > next.score ? previous : next;
 }
 
 /** Saves `result` if it is the best so far for `gameId`. Returns what is stored afterwards. */
 export function saveBestResult(gameId: string, result: GameResult): ProgressEntry {
   const current = readValid();
-  const next: ProgressEntry = { completed: result.completed, hits: result.hits, total: result.total, savedAt: new Date().toISOString() };
+  const next: ProgressEntry = { completed: result.completed, hits: result.hits, total: result.total, score: result.score, savedAt: new Date().toISOString() };
   const best = pickBest(current[gameId], next);
   store.write({ ...current, [gameId]: best });
   return best;

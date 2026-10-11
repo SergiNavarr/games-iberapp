@@ -105,7 +105,7 @@ export class DummyScene extends Phaser.Scene {
     context.announce(`Objetivo alcanzado: ${this.hits} de ${context.total}.`);
     if (this.hits === context.total) {
       context.announce("¡Listo! Tocaste los tres objetivos.");
-      context.complete(true, this.hits);
+      context.complete({ completed: true, hits: this.hits });
     }
   }
 
