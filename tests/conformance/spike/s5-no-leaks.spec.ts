@@ -1,10 +1,18 @@
-// JUDGE · S5: 20 cycles mount() → ready → unmount(): no console message (any type) containing "WebGL" or "context lost";
-// 0 canvas at the end (checked 500 ms after the last unmount, the same margin S4 uses).
+// JUDGE · S5: 20 cycles mount() → ready → unmount(): no console message of type `warning` or `error`, nor `pageerror`,
+// containing "WebGL" or "context lost" (case-insensitive) — wording corrected by the coordinator on 2026-10-11, so the
+// Phaser banner (console.log) does not count. 0 canvas at the end (checked 500 ms after the last unmount, as in S4).
 import { expect, test, type Page } from "@playwright/test";
 import { canvasCount, gotoSpike, mountAndWaitReady, unmountAndSettle, watchConsole, type SpikeWindow } from "./support";
 
 const CYCLES = 20;
 const FORBIDDEN = /webgl|context lost/i;
+
+function forbiddenMessages(c: ReturnType<typeof watchConsole>): string[] {
+  return [
+    ...c.messages.filter((m) => (m.type === "warning" || m.type === "error") && FORBIDDEN.test(m.text)).map((m) => `${m.type}: ${m.text}`),
+    ...c.pageErrors.filter((e) => FORBIDDEN.test(e)).map((e) => `pageerror: ${e}`),
+  ];
+}
 
 /** Creates 40 WebGL canvases, draws 3 frames on each and removes them, releasing the context or leaking it (kept referenced). */
 async function churnContexts(page: Page, release: boolean) {
@@ -34,14 +42,14 @@ test("S5 · control de entorno: WebGL bien liberado no deja mensajes en la conso
   const c = watchConsole(page);
   expect(await churnContexts(page, true), "[control] sin WebGL en el navegador del juez, S5 no ejercitaría contextos WebGL").toBe(true);
   await page.waitForTimeout(1_000);
-  expect(c.messages.filter((m) => FORBIDDEN.test(m.text)).map((m) => m.text), "[control] el navegador emite mensajes WebGL por sí solo").toEqual([]);
+  expect(forbiddenMessages(c), "[control] el navegador emite mensajes WebGL por sí solo").toEqual([]);
 });
 
 test("S5 · control de entorno: una fuga de contextos WebGL sí deja mensajes en la consola", async ({ page }) => {
   const c = watchConsole(page);
   expect(await churnContexts(page, false), "[control] sin WebGL en el navegador del juez").toBe(true);
   await page.waitForTimeout(1_000);
-  expect(c.messages.some((m) => FORBIDDEN.test(m.text)), "[control] el entorno no detecta fugas de contextos WebGL: S5 no discriminaría").toBe(true);
+  expect(forbiddenMessages(c).length, "[control] el entorno no detecta fugas de contextos WebGL: S5 no discriminaría").toBeGreaterThan(0);
 });
 
 test(`S5 · ${CYCLES} ciclos mount → ready → unmount sin fugas`, async ({ page }) => {
@@ -58,9 +66,8 @@ test(`S5 · ${CYCLES} ciclos mount → ready → unmount sin fugas`, async ({ pa
   await page.waitForTimeout(500);
   test.info().annotations.push({ type: "info", description: `renderer por ciclo: ${[...new Set(renderers)].join(", ")}` });
 
-  expect.soft(
-    c.messages.filter((m) => FORBIDDEN.test(m.text)).map((m) => `${m.type}: ${m.text}`),
-    'mensajes de consola con "WebGL" o "context lost"',
-  ).toEqual([]);
+  const otherTypes = c.messages.filter((m) => m.type !== "warning" && m.type !== "error" && FORBIDDEN.test(m.text)).length;
+  if (otherTypes) test.info().annotations.push({ type: "info", description: `mensajes con "WebGL" de otros tipos (no cuentan): ${otherTypes}` });
+  expect.soft(forbiddenMessages(c), 'warning/error/pageerror con "WebGL" o "context lost"').toEqual([]);
   expect.soft(await canvasCount(page), "canvas al final").toBe(0);
 });
