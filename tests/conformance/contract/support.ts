@@ -337,8 +337,10 @@ export function readProbe(page: Page) {
 
 /**
  * PNG of the stage's canvas through CDP Page.captureScreenshot with document coordinates and captureBeyondViewport:
- * works with the canvas OFF screen without scrolling to it (checked: no IntersectionObserver entry fires), so C08c can
- * capture while the stage is out of the viewport. Returns base64.
+ * works with the canvas OFF screen without scrolling to it, so C08c can capture while the stage is out of the viewport.
+ * Caveat: the capture may enlarge the viewport for an instant (measured by the coder in T3+T4; a bare probe of mine
+ * saw no IntersectionObserver entry), which the wrapper filters by ignoring visibility changes under 150 ms.
+ * Returns base64.
  */
 export async function canvasShot(page: Page, stageSelector = STAGE): Promise<string> {
   const clip = await page.evaluate((sel) => {
