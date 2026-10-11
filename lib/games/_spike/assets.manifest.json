@@ -1,0 +1,15 @@
+[
+  {
+    "key": "missing",
+    "file": "missing.webp",
+    "type": "image",
+    "width": 128,
+    "height": 128,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 20,
+    "placeholder": "cuadrado mute de 128 px con una cruz",
+    "use": "asset que falta a propósito: prueba del placeholder"
+  }
+]
