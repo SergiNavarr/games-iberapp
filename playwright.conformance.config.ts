@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./tests/conformance/contract/variants";
 
 // JUDGE: conformance suite (tests/conformance). Separate from playwright.config.ts (the coder's e2e tests).
 // Own ports so it never touches the coder's dev server (3006): 3007 = next dev, 3008 = next start.
@@ -13,7 +14,8 @@ const NEXT = "node node_modules/next/dist/bin/next";
 // CONFORMANCE_SERVERS=dev skips `next start` (iterating on S3–S8 without a build).
 const servers = (process.env.CONFORMANCE_SERVERS ?? "dev,start").split(",");
 
-export default defineConfig({
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export default defineConfig<{}, { variant: Variant }>({
   testDir: "./tests/conformance",
   outputDir: "./tests/.results/conformance",
   // Timing-sensitive tests (S4, S7): one worker, no retries, so every verdict comes from a single plain run.
@@ -52,17 +54,28 @@ export default defineConfig({
       },
     },
     { name: "start", testMatch: /spike[\\/]s9-.*\.spec\.ts$/, use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL } },
-    // T3 + T4 (checklist §2.6, items W, against _dummy): everything on next dev except C02 and C31, which look for the
-    // Phaser chunk in response bodies and run on next start (dev chunks keep comments).
+    // T3 + T4 and E1 (checklist §2.6, items W): every spec once per `_dummy` variant (option `variant`; specs skip what
+    // does not apply). Everything on next dev except C02 and C31, which look for the Phaser chunk in response bodies and
+    // run on next start (dev chunks keep comments).
     {
       name: "contract-dev",
       testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
-      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL },
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL, variant: DUMMY_VARIANT },
+    },
+    {
+      name: "contract-run-dev",
+      testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL, variant: RUN_VARIANT },
     },
     {
       name: "contract-start",
       testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
-      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL },
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: DUMMY_VARIANT },
+    },
+    {
+      name: "contract-run-start",
+      testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: RUN_VARIANT },
     },
   ],
 });

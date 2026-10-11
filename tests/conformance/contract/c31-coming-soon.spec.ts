@@ -2,11 +2,12 @@
 // visible (text and an illustration with size > 0), with no canvas (whole document), no role="alert" (inside the
 // GameStage root) and no Phaser chunk requested. The stage is scrolled into view first, so the 600 px preload would
 // have fired if the wrapper tried it.
-import { expect, test } from "@playwright/test";
-import { GAME_ROOT, gotoBench } from "./support";
+import { expect, GAME_ROOT, gotoBench, test } from "./support";
 import { watchJsBodies } from "./support-bundle";
 
 const COMING_SOON_ART = '[data-testid="coming-soon-art"]';
+
+test.skip(({ variant }) => variant.run, "no depende de la variante: corre una vez, en el proyecto de _dummy");
 
 for (const gameId of ["dark-sky", "night-voices"]) {
   test(`C31 · "Próximamente" en ${gameId}`, async ({ page }) => {

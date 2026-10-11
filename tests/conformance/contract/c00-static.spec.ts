@@ -1,15 +1,17 @@
-// JUDGE · static items of §2.6 (W) against `_dummy`: C03(a), C04, C09(a), C13(a), C14(a), C15, C17(a), C20(a).
-// Each search is the literal `rg` pattern of the checklist, applied to "carpetas del juego" = lib/games/_dummy/ and
-// lib/games/shared/ (C20 a: outside shared/, i.e. lib/games/_dummy/). Comments count, as with rg; C14(a) uses word
-// boundaries (\b), per the corrected wording.
+// JUDGE · static items of §2.6 (W) against the `_dummy` variants: C03(a), C04, C09(a), C13(a), C14(a), C15, C17(a),
+// C20(a). Each search is the literal `rg` pattern of the checklist, applied to "carpetas del juego" = lib/games/_dummy/,
+// lib/games/_dummy-run/ and lib/games/shared/ (C20 a: outside shared/). Comments count, as with rg; C14(a) uses word
+// boundaries (\b), per the corrected wording. Runs once (in the `_dummy` project): it covers both variants.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
 import { grepDir, type GrepHit } from "../spike/support";
-import { DUMMY_DIR, SHARED_DIR } from "./support";
+import { DUMMY_VARIANT, expect, RUN_VARIANT, SHARED_DIR, test } from "./support";
 
-const GAME_DIRS = [DUMMY_DIR, SHARED_DIR];
+const VARIANT_DIRS = [DUMMY_VARIANT.dir, RUN_VARIANT.dir];
+const GAME_DIRS = [...VARIANT_DIRS, SHARED_DIR];
+
+test.skip(({ variant }) => variant.run, "las búsquedas estáticas cubren las dos variantes desde el proyecto de _dummy");
 const grepGame = (pattern: RegExp) => GAME_DIRS.flatMap((d) => grepDir(d, pattern));
 
 function grepFiles(files: string[], pattern: RegExp): GrepHit[] {
@@ -26,7 +28,7 @@ test('C03(a) · rg "from \\"phaser\\"" en lib/games/*/meta.ts, registry.ts y con
     .readdirSync("lib/games", { withFileTypes: true })
     .filter((d) => d.isDirectory() && fs.existsSync(path.join("lib/games", d.name, "meta.ts")))
     .map((d) => `lib/games/${d.name}/meta.ts`);
-  expect(metas, "[control] no hay ningún lib/games/*/meta.ts").toContain(`${DUMMY_DIR}/meta.ts`);
+  for (const dir of VARIANT_DIRS) expect(metas, `[control] falta ${dir}/meta.ts`).toContain(`${dir}/meta.ts`);
   expect(grepFiles([...metas, "lib/games/registry.ts", "lib/games/contract.ts"], /from "phaser"/)).toEqual([]);
 });
 
@@ -68,5 +70,5 @@ test('C17(a) · rg "innerWidth|innerHeight|screen\\.|devicePixelRatio" en carpet
 });
 
 test('C20(a) · rg "tweens\\.add|cameras\\.main\\.(shake|flash|fade|pan|zoomTo)" fuera de lib/games/shared/ → 0', () => {
-  expect(grepDir(DUMMY_DIR, /tweens\.add|cameras\.main\.(shake|flash|fade|pan|zoomTo)/)).toEqual([]);
+  expect(VARIANT_DIRS.flatMap((d) => grepDir(d, /tweens\.add|cameras\.main\.(shake|flash|fade|pan|zoomTo)/))).toEqual([]);
 });

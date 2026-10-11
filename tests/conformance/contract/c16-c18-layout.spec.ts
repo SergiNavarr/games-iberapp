@@ -1,8 +1,22 @@
-// JUDGE · C16 (no horizontal scroll), C17(b) (size follows the container) and C18 (section proportion).
-// C17(a) is in c00-static.spec.ts.
-import { expect, test } from "@playwright/test";
+// JUDGE · C16 (no horizontal scroll; E1 adds the `review` state), C17(b) (size follows the container) and C18 (section
+// proportion), per `_dummy` variant. C17(a) is in c00-static.spec.ts. Run games play at ×1 here; in C16 the bot collects
+// so that `review` is reached.
 import { containedWithin, stageAndCanvasRects } from "../spike/support";
-import { completeWithKeyboard, gotoBench, startGame, waitForState, type ConformanceWindow } from "./support";
+import {
+  answerReview,
+  captureAnswers,
+  completeWithKeyboard,
+  expect,
+  gotoBench,
+  logLength,
+  realParams,
+  startGame,
+  steerRun,
+  test,
+  waitForLogEvent,
+  waitForState,
+  type ConformanceWindow,
+} from "./support";
 
 const C16_VIEWPORTS = [
   { width: 360, height: 800 },
@@ -12,22 +26,30 @@ const C16_VIEWPORTS = [
 ];
 
 for (const viewport of C16_VIEWPORTS) {
-  test(`C16 · sin scroll horizontal a ${viewport.width} px en intro, playing y result`, async ({ page }) => {
+  test(`C16 · sin scroll horizontal a ${viewport.width} px en intro, playing, review y result`, async ({ page, variant }) => {
     await page.setViewportSize(viewport);
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    await gotoBench(page);
+    await gotoBench(page, variant.id, realParams());
     await waitForState(page, "intro");
     expect.soft(await overflow(), "intro: scrollWidth − innerWidth").toBeLessThanOrEqual(0);
     await startGame(page);
     expect.soft(await overflow(), "playing: scrollWidth − innerWidth").toBeLessThanOrEqual(0);
-    await completeWithKeyboard(page);
+    if (variant.run) {
+      const answers = await captureAnswers(page);
+      const from = await logLength(page);
+      await steerRun(page, "keyboard", "all");
+      await waitForLogEvent(page, "run-end", from, 30_000);
+      await waitForState(page, "review", 10_000);
+      expect.soft(await overflow(), "review: scrollWidth − innerWidth").toBeLessThanOrEqual(0);
+      await answerReview(page, answers);
+    } else await completeWithKeyboard(page);
     await waitForState(page, "result");
     expect.soft(await overflow(), "result: scrollWidth − innerWidth").toBeLessThanOrEqual(0);
   });
 }
 
-test("C17(b) · el canvas queda dentro del escenario y sigue a un cambio de tamaño solo del contenedor en ≤ 500 ms", async ({ page }) => {
-  await gotoBench(page);
+test("C17(b) · el canvas queda dentro del escenario y sigue a un cambio de tamaño solo del contenedor en ≤ 500 ms", async ({ page, variant }) => {
+  await gotoBench(page, variant.id, realParams());
   await startGame(page);
   await page.waitForTimeout(500);
   const fmt = (r: unknown) => JSON.stringify(r);
@@ -56,9 +78,9 @@ const C18_CASES = [
 ];
 
 for (const c of C18_CASES) {
-  test(`C18 · el escenario mide ${c.label} (±1%) a ${c.width} px`, async ({ page }) => {
+  test(`C18 · el escenario mide ${c.label} (±1%) a ${c.width} px`, async ({ page, variant }) => {
     await page.setViewportSize({ width: c.width, height: c.height });
-    await gotoBench(page);
+    await gotoBench(page, variant.id, realParams());
     await startGame(page);
     const { stage } = await stageAndCanvasRects(page);
     expect(stage, "escenario").not.toBeNull();

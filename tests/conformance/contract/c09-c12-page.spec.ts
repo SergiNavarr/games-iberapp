@@ -1,7 +1,8 @@
-// JUDGE · C09(b)–C12 (living with the page), the same tests as T2's S6 with the `_dummy` in `playing` via "Empezar".
+// JUDGE · C09(b)–C12 (living with the page), the same tests as T2's S6 with each `_dummy` variant in `playing` via
+// "Empezar" (run games at ×1, so they stay in `playing`). C12 (E1): with a run, the vertical swipe does not move the player.
 // C09(a) is in c00-static.spec.ts. Steps marked [control] validate the test mechanism, not the code. Nothing here
 // requires arrows to scroll with the focus INSIDE the stage (the game prevents the default of its keys there).
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   canvasCenter,
   cdpSwipe,
@@ -13,7 +14,7 @@ import {
   scrollY,
   type JudgeWindow,
 } from "../spike/support";
-import { BOX, gotoBench, startGame, STAGE } from "./support";
+import { BOX, debugRun, expect, gotoBench, realParams, startGame, STAGE, test } from "./support";
 
 const KEY_TYPES = ["keydown", "keyup"];
 
@@ -49,9 +50,9 @@ async function focusOutsideStage(page: Page) {
   expect(focusInside, "[control] después del clic en el cuerpo el foco sigue dentro del escenario").toBe(false);
 }
 
-test("C09(b) · después de montar, 0 listeners nuevos de keydown/keyup en window y document", async ({ page }) => {
+test("C09(b) · después de montar, 0 listeners nuevos de keydown/keyup en window y document", async ({ page, variant }) => {
   await page.addInitScript(instrumentListeners);
-  await gotoBench(page);
+  await gotoBench(page, variant.id, realParams());
   await page.waitForLoadState("networkidle");
   await page.waitForTimeout(1_000);
   const snap = await page.evaluate(() => (window as unknown as JudgeWindow).__judge.snapshot());
@@ -68,8 +69,8 @@ test("C09(b) · después de montar, 0 listeners nuevos de keydown/keyup en windo
   expect(result.active.map((a) => `${a.target}.addEventListener("${a.type}") capture=${a.capture}\n${a.stack}`)).toEqual([]);
 });
 
-test("C10 · con el foco fuera, Space, PageDown y ArrowDown scrollean; Escape llega a window", async ({ page }) => {
-  await gotoBench(page);
+test("C10 · con el foco fuera, Space, PageDown y ArrowDown scrollean; Escape llega a window", async ({ page, variant }) => {
+  await gotoBench(page, variant.id, realParams());
   await startGame(page);
   await focusOutsideStage(page);
   for (const key of ["Space", "PageDown", "ArrowDown"]) {
@@ -88,8 +89,8 @@ test("C10 · con el foco fuera, Space, PageDown y ArrowDown scrollean; Escape ll
   expect.soft(await page.evaluate(() => (window as unknown as { __judgeEscape: number }).__judgeEscape), "Escape en el listener de window").toBe(1);
 });
 
-test("C11 · mouse.wheel(0, 400) sobre el canvas y fuera de él scrollea", async ({ page }) => {
-  await gotoBench(page);
+test("C11 · mouse.wheel(0, 400) sobre el canvas y fuera de él scrollea", async ({ page, variant }) => {
+  await gotoBench(page, variant.id, realParams());
   await startGame(page);
 
   const p = await spacerPoint(page);
@@ -110,8 +111,8 @@ test("C11 · mouse.wheel(0, 400) sobre el canvas y fuera de él scrollea", async
 test.describe("C12 · celular 390×844 con toque", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-  test("C12 · deslizamiento vertical por CDP sobre el canvas scrollea y touchAction ≠ none", async ({ page }) => {
-    await gotoBench(page);
+  test("C12 · deslizamiento vertical por CDP sobre el canvas scrollea y touchAction ≠ none", async ({ page, variant }) => {
+    await gotoBench(page, variant.id, realParams());
     await startGame(page);
 
     // [control] the same swipe over the spacer must scroll.
@@ -123,10 +124,22 @@ test.describe("C12 · celular 390×844 con toque", () => {
     await placeCanvasAt(page, 0.5);
     const c = await canvasCenter(page);
     const span = Math.min(300, c.height * 0.6);
-    test.info().annotations.push({ type: "info", description: `elemento al inicio del gesto: ${await elementAt(page, c.x, c.y + span / 2)}` });
+    // With a run, swipe at a quarter of the canvas width (away from the player, who starts centered): if the game took
+    // the vertical gesture as steering, the player would move toward that x.
+    const rect = await page.evaluate((sel) => document.querySelector(sel)?.querySelector("canvas")?.getBoundingClientRect().toJSON() as DOMRect, STAGE);
+    const x = variant.run ? rect.left + rect.width * 0.25 : c.x;
+    test.info().annotations.push({ type: "info", description: `elemento al inicio del gesto: ${await elementAt(page, x, c.y + span / 2)}` });
     const before = await scrollY(page);
-    await cdpSwipe(page, c.x, c.y + span / 2, c.y - span / 2);
+    const playerBefore = variant.run ? (await debugRun(page))?.player ?? null : null;
+    await cdpSwipe(page, x, c.y + span / 2, c.y - span / 2);
     expect.soft(await scrollAfter(page, before), `deslizamiento sobre el canvas: scrollY antes ${before}`).toBeGreaterThan(before);
+    if (variant.run) {
+      // E1: the swipe scrolls the page and does not move the player.
+      await page.waitForTimeout(300);
+      const playerAfter = (await debugRun(page))?.player ?? null;
+      expect(playerBefore, "[control] debugRun() antes del deslizamiento").not.toBeNull();
+      expect.soft(playerAfter, "debugRun().player después del deslizamiento vertical").toEqual(playerBefore);
+    }
 
     const touchAction = await page.evaluate((sel) => {
       const canvas = document.querySelector(sel)?.querySelector("canvas");

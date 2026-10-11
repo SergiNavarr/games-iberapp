@@ -1,12 +1,12 @@
-// JUDGE · C02 (project "contract-start", next start): loading /conformance/_dummy without touching "Empezar" and
-// without scrolling, no JS response body contains both "3.90.0" and "Phaser"; after "Empezar", some does.
-import { expect, test } from "@playwright/test";
-import { BOX, gotoBench, startGame } from "./support";
+// JUDGE · C02 (projects "contract-start" / "contract-run-start", next start): loading /conformance/<variant> without
+// touching "Empezar" and without scrolling, no JS response body contains both "3.90.0" and "Phaser"; after "Empezar",
+// some does.
+import { BOX, expect, fastParams, gotoBench, startGame, test } from "./support";
 import { watchJsBodies } from "./support-bundle";
 
-test("C02 · Phaser fuera del bundle inicial (next start)", async ({ page }) => {
+test("C02 · Phaser fuera del bundle inicial (next start)", async ({ page, variant }) => {
   const js = watchJsBodies(page);
-  await gotoBench(page);
+  await gotoBench(page, variant.id, fastParams(variant));
   // [control] the stage starts farther than 600 px below the viewport, so the 600 px preload cannot fire on load.
   const distance = await page.evaluate((sel) => (document.querySelector(sel)?.getBoundingClientRect().top ?? 0) - window.innerHeight, BOX);
   expect(distance, "[control] el escenario arranca a menos de 600 px del viewport: la carga dispararía la precarga").toBeGreaterThan(600);

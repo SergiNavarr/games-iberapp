@@ -1,9 +1,11 @@
-// JUDGE · C19 (setTheme without remounting) and C20(b) (reducedMotion respected). C20(a) is in c00-static.spec.ts.
-// C19 reads the pixel at meta.backgroundProbe (logical px, scaled to the canvas) from a screenshot, 500 ms after the
-// theme change, and compares it with the new theme's computed --bg2 (tolerance per channel: TOLERANCE).
+// JUDGE · C19 (setTheme without remounting) and C20(b) (reducedMotion respected, E1 wording), per `_dummy` variant
+// (run games at ×1). C20(a) is in c00-static.spec.ts. C19 reads the pixel at meta.backgroundProbe (logical px, scaled
+// to the canvas) from a screenshot, 500 ms after the theme change, and compares it with the new theme's computed --bg2
+// (tolerance per channel: TOLERANCE). C20(b): with reducedMotion, debugMotion().active = 0 in 11 samples over 1 s; the
+// byte-identical captures only for games with meta.essentialMotion false.
 import zlib from "node:zlib";
-import { expect, test, type Page } from "@playwright/test";
-import { gotoBench, loadDummyMeta, logLength, readLog, startGame, STAGE, type ConformanceWindow } from "./support";
+import type { Page } from "@playwright/test";
+import { expect, gotoBench, loadMeta, logLength, readLog, realParams, startGame, STAGE, test, type ConformanceWindow } from "./support";
 
 const TOLERANCE = 2;
 
@@ -44,9 +46,9 @@ async function probePixel(page: Page, probe: { x: number; y: number }) {
   return pixelOf(await page.screenshot({ clip: { x: point.x, y: point.y, width: 1, height: 1 } }));
 }
 
-test("C19 · setTheme sin remontar: mismo canvas, sin ready nuevo y el fondo pasa al --bg2 del tema nuevo en ≤ 500 ms", async ({ page }) => {
-  const meta = await loadDummyMeta();
-  await gotoBench(page);
+test("C19 · setTheme sin remontar: mismo canvas, sin ready nuevo y el fondo pasa al --bg2 del tema nuevo en ≤ 500 ms", async ({ page, variant }) => {
+  const meta = await loadMeta(variant);
+  await gotoBench(page, variant.id, realParams());
   await startGame(page);
   await page.evaluate((sel) => {
     const canvas = document.querySelector(sel)?.querySelector("canvas");
@@ -81,16 +83,46 @@ test("C19 · setTheme sin remontar: mismo canvas, sin ready nuevo y el fondo pas
   expect.soft(readyAfter.length, "ready después de cambiar el tema").toBe(0);
 });
 
-test.describe("C20(b) · reducedMotion", () => {
-  test("C20(b) · con reducedMotion=1, en playing y sin input, dos capturas del canvas con 1 s de diferencia son idénticas", async ({ page }) => {
-    await gotoBench(page, undefined, { seed: 7, testHooks: true, reducedMotion: true });
-    await startGame(page);
+/** debugMotion().active sampled in the page every 100 ms, 11 samples (1 s). null if the hook is missing. */
+function sampleActive(page: Page): Promise<number[] | null> {
+  return page.evaluate(async () => {
+    const out: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const motion = (window as unknown as ConformanceWindow).__conformance.handle()?.debugMotion?.();
+      if (!motion) return null;
+      out.push(motion.active);
+      if (i < 10) await new Promise((r) => setTimeout(r, 100));
+    }
+    return out;
+  });
+}
+
+async function playingInView(page: Page) {
+  await startGame(page);
+  await page.locator(STAGE).locator("canvas").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(500);
+}
+
+test("C20(b) · con reducedMotion, en playing y sin input: 0 efectos no esenciales activos durante 1 s (y capturas idénticas sin movimiento esencial)", async ({ page, variant }) => {
+  const meta = await loadMeta(variant);
+
+  // [control] without reducedMotion the same game reports some non-essential effect, else "0 active" proves nothing.
+  await gotoBench(page, variant.id, realParams({ reducedMotion: false }));
+  await playingInView(page);
+  const moving = await sampleActive(page);
+  expect(moving, "debugMotion() con testHooks").not.toBeNull();
+  expect(Math.max(...(moving ?? [0])), `[control] sin reducedMotion no hay efectos no esenciales activos: ${JSON.stringify(moving)}`).toBeGreaterThan(0);
+
+  await gotoBench(page, variant.id, realParams({ reducedMotion: true }));
+  await playingInView(page);
+  const still = await sampleActive(page);
+  expect.soft(still, "debugMotion().active con reducedMotion, 11 muestras en 1 s").toEqual(Array(11).fill(0));
+
+  if (meta.essentialMotion === false) {
     const canvas = page.locator(STAGE).locator("canvas");
-    await canvas.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(1_000);
     const first = await canvas.screenshot();
     await page.waitForTimeout(1_000);
     const second = await canvas.screenshot();
-    expect(first.equals(second), `capturas distintas (${first.length} y ${second.length} bytes)`).toBe(true);
-  });
+    expect.soft(first.equals(second), `essentialMotion: false y capturas distintas (${first.length} y ${second.length} bytes)`).toBe(true);
+  }
 });
