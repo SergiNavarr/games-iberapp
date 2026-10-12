@@ -7,7 +7,7 @@
 // (clean-channels, agreed in G1), a collision with an obstacle: steer to it, release the keys, sample around the hit.
 import zlib from "node:zlib";
 import type { Page } from "@playwright/test";
-import { debugMotion, debugRun, expect, gotoBench, loadMeta, logLength, readLog, realParams, startGame, STAGE, test, type ConformanceWindow } from "./support";
+import { debugRun, expect, gotoBench, loadMeta, logLength, readLog, realParams, startGame, STAGE, test, type ConformanceWindow } from "./support";
 
 const TOLERANCE = 2;
 
@@ -111,8 +111,9 @@ async function playingInView(page: Page) {
 
 /**
  * Games without an ambient effect: steer the player under the next reachable obstacle, release the keys, and sample
- * debugMotion().active from 400 ms before its arrival (no input during the window). Returns the samples and whether a
- * collision was registered inside the window.
+ * debugMotion().active from 500 ms (game time) before its arrival (no input during the window). The wait and the 11
+ * samples run inside the page (no test↔page round trips that could start the window late), and "collided in the
+ * window" means a collision whose game time lies within the game-time range actually sampled.
  */
 async function sampleAroundCollision(page: Page) {
   const run = await debugRun(page);
@@ -134,15 +135,28 @@ async function sampleAroundCollision(page: Page) {
     await page.waitForTimeout(20);
     await page.keyboard.up(key);
   }
-  for (let i = 0; i < 400; i++) {
-    const now = await debugRun(page);
-    if (!now || now.elapsedMs >= target.arriveAt - 400) break;
-    await page.waitForTimeout(20);
-  }
-  const before = (await debugMotion(page))?.collisions.length ?? 0;
-  const samples = await sampleActive(page);
-  const after = (await debugMotion(page))?.collisions.length ?? 0;
-  return { samples, collided: after > before, target: target.id };
+  const sampled = await page.evaluate(async (arriveAt) => {
+    const c = (window as unknown as ConformanceWindow).__conformance;
+    const deadline = performance.now() + 20_000;
+    while (performance.now() < deadline) {
+      const r = c.handle()?.debugRun?.();
+      if (!r || r.elapsedMs >= arriveAt - 500) break;
+      await new Promise((res) => setTimeout(res, 5));
+    }
+    const samples: number[] = [];
+    const elapsed: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const m = c.handle()?.debugMotion?.();
+      const r = c.handle()?.debugRun?.();
+      if (!m || !r) return null;
+      samples.push(m.active);
+      elapsed.push(r.elapsedMs);
+      if (i < 10) await new Promise((res) => setTimeout(res, 100));
+    }
+    return { samples, from: elapsed[0], to: elapsed[10], collisions: c.handle()?.debugMotion?.()?.collisions ?? [] };
+  }, target.arriveAt);
+  const collided = !!sampled && sampled.collisions.some((t: number) => t >= sampled.from && t <= sampled.to);
+  return { samples: sampled?.samples ?? null, collided, target: `${target.id} (llega a los ${target.arriveAt} ms; ventana ${sampled ? `${Math.round(sampled.from)}–${Math.round(sampled.to)}` : "?"} ms; choques ${JSON.stringify(sampled?.collisions ?? [])})` };
 }
 
 test("C20(b) · con reducedMotion, en playing y sin input: 0 efectos no esenciales activos durante 1 s (y capturas idénticas sin movimiento esencial)", async ({ page, variant }) => {
