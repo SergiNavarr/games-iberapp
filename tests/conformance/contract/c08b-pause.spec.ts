@@ -4,14 +4,30 @@
 // in 1 s (also from 250 ms after). Captures go through CDP with captureBeyondViewport, so they work with the stage off
 // screen without scrolling to it. Hidden is simulated by redefining document.visibilityState/hidden and dispatching
 // visibilitychange (headless never hides a tab for real).
-import { expect, test, type Page } from "@playwright/test";
-import { BOX, canvasShot, countRaf, gotoBench, instrumentProbe, SEED, startGame, STAGE, watchConsole, type ConformanceWindow, type JudgeProbe } from "./support";
+import type { Page } from "@playwright/test";
+import {
+  BOX,
+  canvasShot,
+  countRaf,
+  expect,
+  gotoBench,
+  instrumentProbe,
+  realParams,
+  startGame,
+  STAGE,
+  test,
+  watchConsole,
+  type ConformanceWindow,
+  type JudgeProbe,
+  type Variant,
+} from "./support";
 
 const SETTLE_MS = 250;
 
-async function playingInView(page: Page) {
+/** Run games play at ×1 here: the run lasts long enough for the control, the still window and the resume window. */
+async function playingInView(page: Page, variant: Variant) {
   await page.addInitScript(instrumentProbe);
-  await gotoBench(page, undefined, { seed: SEED, testHooks: true, reducedMotion: false });
+  await gotoBench(page, variant.id, realParams({ reducedMotion: false }));
   await startGame(page);
   await centerStage(page);
   await page.waitForTimeout(500);
@@ -51,8 +67,8 @@ async function resumedRaf(page: Page) {
   return countRaf(page, 1_000);
 }
 
-test("C08b · pause(): ≤ 2 rAF en 1 s y capturas idénticas; resume(): > 30 rAF en 1 s", async ({ page }) => {
-  await playingInView(page);
+test("C08b · pause(): ≤ 2 rAF en 1 s y capturas idénticas; resume(): > 30 rAF en 1 s", async ({ page, variant }) => {
+  await playingInView(page, variant);
   await expectMoving(page);
   await page.evaluate(() => (window as unknown as ConformanceWindow).__conformance.handle()?.pause());
   const still = await stillWindow(page);
@@ -63,9 +79,9 @@ test("C08b · pause(): ≤ 2 rAF en 1 s y capturas idénticas; resume(): > 30 rA
   expect.soft(resumed, "rAF en 1 s después de resume()").toBeGreaterThan(30);
 });
 
-test("C08b · resume() sin pause() previo y pause() dos veces seguidas: sin excepción ni console.error", async ({ page }) => {
-  const c = watchConsole(page);
-  await playingInView(page);
+test("C08b · resume() sin pause() previo y pause() dos veces seguidas: sin excepción ni console.error", async ({ page, variant }) => {
+  const c = watchConsole(page, variant.assetBase);
+  await playingInView(page, variant);
   const outcome = await page.evaluate(() => {
     const h = (window as unknown as ConformanceWindow).__conformance.handle();
     if (!h) return "sin handle";
@@ -85,8 +101,8 @@ test("C08b · resume() sin pause() previo y pause() dos veces seguidas: sin exce
   expect.soft(c.errors(), "console.error (sin los 404 de assetBase)").toEqual([]);
 });
 
-test("C08c(a) · escenario fuera del viewport: ≤ 2 rAF y capturas idénticas; de vuelta en pantalla: > 30 rAF", async ({ page }) => {
-  await playingInView(page);
+test("C08c(a) · escenario fuera del viewport: ≤ 2 rAF y capturas idénticas; de vuelta en pantalla: > 30 rAF", async ({ page, variant }) => {
+  await playingInView(page, variant);
   await expectMoving(page);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   const offscreen = await page.evaluate((sel) => {
@@ -102,8 +118,8 @@ test("C08c(a) · escenario fuera del viewport: ≤ 2 rAF y capturas idénticas; 
   expect.soft(resumed, "rAF en 1 s con el escenario de vuelta en pantalla").toBeGreaterThan(30);
 });
 
-test("C08c(b) · pestaña oculta: ≤ 2 rAF y capturas idénticas; visible de nuevo: > 30 rAF", async ({ page }) => {
-  await playingInView(page);
+test("C08c(b) · pestaña oculta: ≤ 2 rAF y capturas idénticas; visible de nuevo: > 30 rAF", async ({ page, variant }) => {
+  await playingInView(page, variant);
   await expectMoving(page);
   const setHidden = (hidden: boolean) =>
     page.evaluate((h) => {

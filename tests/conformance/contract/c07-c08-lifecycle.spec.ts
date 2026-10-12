@@ -1,8 +1,13 @@
-// JUDGE · C07 (one canvas in Strict Mode, next dev) and C08 (20 mounts without leaks, in /conformance/_dummy).
-import { expect, test } from "@playwright/test";
+// JUDGE · C07 (one canvas in Strict Mode, next dev), per variant, and C08 (20 mounts without leaks, alternating the two
+// `_dummy` variants with setGameId, since there is more than one game; runs once, from the `_dummy` project).
 import {
   canvasCount,
+  DUMMY_VARIANT,
+  expect,
   gotoBench,
+  realParams,
+  RUN_VARIANT,
+  test,
   instrumentProbe,
   logLength,
   readProbe,
@@ -16,9 +21,9 @@ import {
 
 const FORBIDDEN = /webgl|context lost/i;
 
-test("C07 · un solo canvas en Strict Mode (next dev)", async ({ page }) => {
+test("C07 · un solo canvas en Strict Mode (next dev)", async ({ page, variant }) => {
   await page.addInitScript(instrumentProbe);
-  await gotoBench(page);
+  await gotoBench(page, variant.id, realParams());
   await startButton(page).click();
   await waitForState(page, "playing");
   expect.soft(await canvasCount(page, STAGE), "canvas en el escenario en playing").toBe(1);
@@ -28,12 +33,18 @@ test("C07 · un solo canvas en Strict Mode (next dev)", async ({ page }) => {
   expect.soft(probe.canvasMax, "máximo simultáneo de canvas en el documento durante la prueba").toBeLessThanOrEqual(1);
 });
 
-test("C08 · 20 ciclos de Empezar y desmontar sin fugas", async ({ page }) => {
+test("C08 · 20 ciclos de Empezar y desmontar sin fugas, alternando las dos variantes", async ({ page, variant }) => {
+  test.skip(variant.run, "corre una vez, desde el proyecto de _dummy, alternando las dos variantes");
   const c = watchConsole(page);
-  await gotoBench(page);
+  await gotoBench(page, DUMMY_VARIANT.id, realParams());
   for (let i = 0; i < 20; i++) {
-    await test.step(`ciclo ${i + 1}`, async () => {
-      await page.evaluate(() => (window as unknown as ConformanceWindow).__conformance.setMounted(true));
+    const gameId = i % 2 === 0 ? DUMMY_VARIANT.id : RUN_VARIANT.id;
+    await test.step(`ciclo ${i + 1} (${gameId})`, async () => {
+      await page.evaluate((id) => {
+        const conf = (window as unknown as ConformanceWindow).__conformance;
+        conf.setGameId(id);
+        conf.setMounted(true);
+      }, gameId);
       await waitForState(page, "intro");
       const from = await logLength(page);
       await startButton(page).click();

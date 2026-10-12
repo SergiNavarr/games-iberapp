@@ -12,4 +12,6 @@ export const meta: GameMeta = {
   total: 3,
   scoreLabel: "objetivos",
   backgroundProbe: { x: 40, y: 40 },
+  // Nothing moves without input except decoration, which reducedMotion stops: canvas captures stay identical (C20b).
+  essentialMotion: false,
 };

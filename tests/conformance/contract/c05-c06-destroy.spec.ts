@@ -1,10 +1,14 @@
 // JUDGE · C05 (destroy() idempotent) and C06 (destroy() before boot = S4 + no callback after destroy), through the raw
-// path and the React path (setMounted(false) during loading). C06 runs every case with the module cold and preloaded.
-import { expect, test, type Page } from "@playwright/test";
+// path and the React path (setMounted(false) during loading), for each `_dummy` variant (run games at ×1). C06 runs
+// every case with the module cold and preloaded.
+import type { Page } from "@playwright/test";
 import {
   callbacksAfterDestroy,
   canvasCount,
+  expect,
   gotoBench,
+  realParams,
+  test,
   logLength,
   readLog,
   startGame,
@@ -17,10 +21,10 @@ import {
 const DELAYS = [0, 10, 100] as const;
 const LATE_WINDOW_MS = 2_000;
 
-test.beforeAll(async ({ browser }, testInfo) => {
+test.beforeAll(async ({ browser, variant }, testInfo) => {
   // Warm the dev server (compile the bench and the game chunk) so "cold" means a cold browser, not a compiling server.
   const page = await browser.newPage({ baseURL: testInfo.project.use.baseURL });
-  await gotoBench(page);
+  await gotoBench(page, variant.id, realParams());
   await startGame(page, 120_000);
   await page.close();
 });
@@ -40,9 +44,9 @@ async function destroyTwice(page: Page, which: "raw" | "react") {
   }, which);
 }
 
-test("C05 · raw: destroy() dos veces seguidas con el juego andando", async ({ page }) => {
-  const c = watchConsole(page);
-  await gotoBench(page);
+test("C05 · raw: destroy() dos veces seguidas con el juego andando", async ({ page, variant }) => {
+  const c = watchConsole(page, variant.assetBase);
+  await gotoBench(page, variant.id, realParams());
   const from = await logLength(page);
   await page.evaluate(() => (window as unknown as ConformanceWindow).__conformance.raw.mount());
   await waitForLogEvent(page, "ready", from, 60_000);
@@ -52,9 +56,9 @@ test("C05 · raw: destroy() dos veces seguidas con el juego andando", async ({ p
   expect.soft(c.pageErrors, "pageerror").toEqual([]);
 });
 
-test("C05 · React: destroy() dos veces seguidas en playing, y otra vez al desmontar", async ({ page }) => {
-  const c = watchConsole(page);
-  await gotoBench(page);
+test("C05 · React: destroy() dos veces seguidas en playing, y otra vez al desmontar", async ({ page, variant }) => {
+  const c = watchConsole(page, variant.assetBase);
+  await gotoBench(page, variant.id, realParams());
   await startGame(page);
   expect.soft(await destroyTwice(page, "react"), "destroy() ×2").toBe("ok");
   await page.evaluate(() => (window as unknown as ConformanceWindow).__conformance.setMounted(false));
@@ -63,9 +67,9 @@ test("C05 · React: destroy() dos veces seguidas en playing, y otra vez al desmo
   expect.soft(c.pageErrors, "pageerror").toEqual([]);
 });
 
-test("C05 · React: en loading, setMounted(false) y después destroy() dos veces más", async ({ page }) => {
-  const c = watchConsole(page);
-  await gotoBench(page);
+test("C05 · React: en loading, setMounted(false) y después destroy() dos veces más", async ({ page, variant }) => {
+  const c = watchConsole(page, variant.assetBase);
+  await gotoBench(page, variant.id, realParams());
   await waitForState(page, "intro");
   const r = await page.evaluate(async () => {
     const c = (window as unknown as ConformanceWindow).__conformance;
@@ -97,9 +101,9 @@ for (const warm of [false, true]) {
   for (const via of ["raw", "react"] as const) {
     for (const delay of DELAYS) {
       const label = via === "raw" ? "raw.mount()/raw.destroy()" : 'Empezar/setMounted(false)';
-      test(`C06 · ${label} a los ${delay} ms · módulo ${warm ? "precargado" : "en frío"}`, async ({ page }) => {
-        const c = watchConsole(page);
-        await gotoBench(page);
+      test(`C06 · ${label} a los ${delay} ms · módulo ${warm ? "precargado" : "en frío"}`, async ({ page, variant }) => {
+        const c = watchConsole(page, variant.assetBase);
+        await gotoBench(page, variant.id, realParams());
         await waitForState(page, "intro");
         if (warm) await page.evaluate(() => (window as unknown as ConformanceWindow).__conformance.raw.importOnly());
 

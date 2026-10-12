@@ -6,13 +6,14 @@ import { BENCH_IDS, benchStage } from "@/components/harness/bench-games";
 import type { GameHandle, GameModule, GameTheme } from "@/lib/games/contract";
 import { useGameProgress } from "@/lib/storage/game-progress";
 
-// HARNESS (T4): conformance bench for the judge's suite (tests/conformance/contract/). Fixed interface: the route
-// /conformance/[gameId], the data-testid attributes, the button names (GameStage) and window.__conformance.
-// Do not change them without agreeing with the coordinator.
+// HARNESS (T4, E1): conformance bench for the judge's suite (tests/conformance/contract/). Fixed interface: the route
+// /conformance/[gameId] and its query (seed, testHooks, reducedMotion, difficulty, timeScale), the data-testid
+// attributes, the button names (GameStage) and window.__conformance. Do not change them without agreeing with the
+// coordinator. The raw path has no review: it logs run-end and keeps its handle until raw.destroy().
 
 type Source = "stage" | "raw";
 type LogEntry = { t: number; event: GameStageEvent["event"]; payload: unknown; source: Source };
-type RawOptions = { seed?: number; reducedMotion?: boolean; theme?: GameTheme; testHooks?: boolean };
+type RawOptions = { seed?: number; reducedMotion?: boolean; theme?: GameTheme; testHooks?: boolean; difficulty?: string; timeScale?: number };
 
 interface ConformanceApi {
   readonly gameId: string;
@@ -41,6 +42,8 @@ interface BenchProps {
   seed?: number;
   testHooks: boolean;
   reducedMotion?: boolean;
+  difficulty?: string;
+  timeScale?: number;
 }
 
 const prefersReducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -51,7 +54,7 @@ function expose(api: ConformanceApi | null, previous?: ConformanceApi) {
   else if (window.__conformance === previous) delete window.__conformance;
 }
 
-export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion }: BenchProps) {
+export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion, difficulty, timeScale }: BenchProps) {
   const [mounted, setMounted] = useState(true);
   const [gameId, setGameId] = useState(initialGameId);
   const [boxWidth, setBoxWidth] = useState<number | null>(null);
@@ -109,17 +112,22 @@ export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion
       const mountWith = (gameModule: GameModule) => {
         const entry = benchStage(id).entry;
         const total = entry.status === "ready" ? entry.meta.total : 0;
+        const useHooks = opts.testHooks ?? testHooks;
         rawHandle = gameModule.mountGame(container, {
           assetBase: `/games/${id}/`,
           theme: opts.theme ?? currentTheme(),
           tokens: readGameTokens(),
           reducedMotion: opts.reducedMotion ?? reducedMotion ?? prefersReducedMotion(),
           seed: opts.seed ?? seed,
-          testHooks: opts.testHooks ?? testHooks,
+          testHooks: useHooks,
+          difficulty: opts.difficulty ?? difficulty ?? (entry.status === "ready" ? entry.meta.defaultDifficulty : undefined),
+          timeScale: useHooks ? (opts.timeScale ?? timeScale) : undefined,
           onReady: () => record({ event: "ready", payload: null }),
           onProgress: (p) => record({ event: "progress", payload: p }),
+          onCollect: (p) => record({ event: "collect", payload: p }),
           announce: (text) => record({ event: "announce", payload: text }),
-          onComplete: (result) => record({ event: "complete", payload: result.total === total ? result : { ...result, totalMismatch: total } } as GameStageEvent),
+          onComplete: (result) => record({ event: "complete", payload: result.total <= total ? result : { ...result, totalOverMax: total } } as GameStageEvent),
+          onRunEnd: (summary) => record({ event: "run-end", payload: summary }),
           onError: (error) => record({ event: "error", payload: error instanceof Error ? error.message : String(error) }),
         });
       };
@@ -161,7 +169,7 @@ export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion
       rawDestroy();
       expose(null, api);
     };
-  }, [seed, testHooks, reducedMotion]);
+  }, [seed, testHooks, reducedMotion, difficulty, timeScale]);
 
   return (
     <main className="bg-page text-fg" style={{ paddingInline: "clamp(16px,4vw,64px)" }}>
@@ -178,7 +186,7 @@ export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion
             const saved = progress[id];
             return (
               <li key={id} data-testid={`progress-${id}`}>
-                {benchStage(id).title}: {saved ? `${saved.hits} / ${saved.total}${saved.completed ? " · completado" : ""}` : "sin jugar"}
+                {benchStage(id).title}: {saved ? `${saved.hits} / ${saved.total} · ${saved.score} puntos${saved.completed ? " · completado" : ""}` : "sin jugar"}
               </li>
             );
           })}
@@ -196,6 +204,8 @@ export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion
               seed,
               testHooks,
               reducedMotion,
+              difficulty,
+              timeScale,
               onHandle: onStageHandle,
               onEvent: onStageEvent,
             }}

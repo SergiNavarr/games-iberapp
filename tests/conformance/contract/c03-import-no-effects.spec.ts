@@ -1,10 +1,9 @@
 // JUDGE · C03(b): importing the game module without calling mountGame (raw.importOnly()) → 0 canvas in the document,
 // 0 requests to assetBase and 0 new listeners (any type, net) on window and document.
-import { expect, test } from "@playwright/test";
 import { instrumentListeners, type JudgeWindow } from "../spike/support";
-import { ASSET_BASE, gotoBench, type ConformanceWindow } from "./support";
+import { expect, fastParams, gotoBench, test, type ConformanceWindow } from "./support";
 
-test("C03(b) · importar el módulo del juego no produce efectos", async ({ page }) => {
+test("C03(b) · importar el módulo del juego no produce efectos", async ({ page, variant }) => {
   await page.addInitScript(instrumentListeners);
   const requests: string[] = [];
   let recording = false;
@@ -12,7 +11,7 @@ test("C03(b) · importar el módulo del juego no produce efectos", async ({ page
     if (recording) requests.push(req.url());
   });
 
-  await gotoBench(page);
+  await gotoBench(page, variant.id, fastParams(variant));
   await page.waitForLoadState("networkidle");
   await page.waitForTimeout(1_000);
   const snap = await page.evaluate(() => (window as unknown as JudgeWindow).__judge.snapshot());
@@ -22,7 +21,7 @@ test("C03(b) · importar el módulo del juego no produce efectos", async ({ page
   recording = false;
 
   const listeners = await page.evaluate((s) => (window as unknown as JudgeWindow).__judge.activeSince(s, ["*"]), snap);
-  const toAssetBase = requests.filter((u) => new URL(u).pathname.startsWith(ASSET_BASE));
+  const toAssetBase = requests.filter((u) => new URL(u).pathname.startsWith(variant.assetBase));
   test.info().annotations.push({ type: "info", description: `pedidos durante la importación: ${requests.length}` });
   expect.soft(await page.evaluate(() => document.querySelectorAll("canvas").length), "canvas en el documento").toBe(0);
   expect.soft(toAssetBase, "pedidos a assetBase").toEqual([]);

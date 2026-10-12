@@ -42,4 +42,18 @@ Contra `/conformance/_dummy` (C31 contra `dark-sky` y `night-voices`), con la in
 - **C08b/C08c:** la ventana de 1 s arranca 250 ms después del disparo. Las capturas del canvas se toman por CDP (`captureBeyondViewport`), así que funcionan con el escenario fuera del viewport sin hacer scroll. Ojo: esa captura puede agrandar el viewport un instante. Mi prueba con un IntersectionObserver suelto no lo detectó, pero el codificador lo midió en el wrapper (T3+T4); por eso el wrapper ignora cambios de visibilidad de menos de 150 ms. Antes de cada pausa, un `[control]` comprueba que sin pausa el canvas se mueve. La pestaña oculta se simula redefiniendo `document.visibilityState`/`hidden` y despachando `visibilitychange`.
 - **C21, C23, C23b:** los assets "presentes" son WebP reales generados con el encoder del navegador, con las medidas exactas del manifiesto, servidos con `route.fulfill`. Las texturas se leen con `debugTextures()`: `source` es `file` si el asset está presente, `placeholder` si falta y `scaled` si tiene otras medidas.
 - **C30:** (a) una entrada sembrada con menos aciertos queda reemplazada; (b) en un empate gana el último; (c) `pickBest` en Node conserva un resultado mejor ya guardado (el dummy no puede terminar con menos aciertos).
+### E1 · enmienda del contrato (recorrido y revisión)
+
+La suite W corre **una vez por variante** del dummy, con la opción de proyecto `variant` (`contract/variants.ts`): `contract-dev`/`contract-start` con `_dummy` (sin recorrido) y `contract-run-dev`/`contract-run-start` con `_dummy-run` (recorrido + revisión). Cada spec omite (`skip`) lo que no aplica a su variante. Por eso aparecen omitidos en el reporte:
+
+| Corre una sola vez, en el proyecto de `_dummy` | Solo `_dummy` | Solo `_dummy-run` |
+| --- | --- | --- |
+| `c00-static` (las búsquedas cubren `_dummy`, `_dummy-run` y `shared/`), C08 (alterna las dos variantes con `setGameId`), C30(c) (`pickBest` en Node), C31 | C26 por acierto y "después ningún input" por el camino `raw`, C28 marcador por acierto | C26 por fase, C28 selector de dificultad, marcadores de recorrido y revisión, texto con `total` 0, C12 (el jugador no se mueve), C24, C25, C33–C36 |
+
+- `_dummy-run` a ×10 cuando solo importa llegar al final; a ×1 cuando se juega el recorrido con el bot (`steerRun`: teclado, mouse o toque hacia el próximo objeto de `debugRun().items`, con las posiciones de `debugTargets()`). C24/C25 a ×1, como se acordó.
+- Respuestas correctas de la revisión: `debugRun().items[].answer`, capturadas mientras se juega y mapeadas por `review-item[data-item-id]`.
+- C34 y C36 corren por el camino `raw`, cuyo handle sigue vivo después de `run-end`.
+- `JUDGE_MODULES_ROOT` cambia de dónde se leen `meta`, manifiestos, `contract.ts` y `game-progress.ts`. Sirve solo para validar la suite contra un doble; el veredicto siempre usa el repo.
+- **Validación (11/10/2026):** contra un doble con las dos variantes (fuera del repo), la versión correcta pasa todo en las dos. Los 18 defectos inyectados del camino nuevo se detectan, cada uno en su criterio. Lo que corregí en mis tests por esa validación: el bot de puntero centra el canvas antes de dirigir, y C12 desliza lejos del jugador para que un gesto vertical tomado como dirección se note.
+
 - **Validación de la suite (11/10/2026):** contra un doble de la interfaz fija (fuera del repo), la versión correcta pasa los 65 tests de `contract/`. De 32 defectos inyectados se detectan 31. El que no se detecta es "destroy no quita el canvas": C08 no lo ve porque desmontar el `GameStage` se lleva el escenario, pero lo detecta C05 por el camino `raw`.

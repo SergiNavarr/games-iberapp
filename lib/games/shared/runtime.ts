@@ -2,7 +2,7 @@ import * as Phaser from "phaser";
 import { gameResultSchema, type DebugTarget, type GameConfig, type GameHandle, type GameTokens } from "@/lib/games/contract";
 import { describeTextures, type ManifestEntry } from "./assets";
 import { createBaseConfig } from "./config";
-import { PALETTE_KEY, setGameContext, type GameContext, type SceneTarget } from "./context";
+import { PALETTE_KEY, setGameContext, type GameContext, type MotionStats, type SceneRun, type SceneTarget } from "./context";
 import { DESIGN_SIZES, layoutFor } from "./layout";
 import { toPalette, type Palette } from "./palette";
 import { createRandom } from "./random";
@@ -13,6 +13,8 @@ export interface GameDefinition {
   manifest: readonly ManifestEntry[];
   /** meta.total */
   total: number;
+  /** The game steers with shared/steer.ts: its canvas gets touch-action: pan-y (horizontal drags reach the game). */
+  pointerSteer?: boolean;
 }
 
 // Phaser assigns window.onblur/onfocus when a game starts and never puts them back (T2 report, §4). They are saved
@@ -33,6 +35,9 @@ const releaseWindowHandlers = () => {
   restoreWindowHandlers();
 };
 
+/** Longest real frame the game clock accepts: a hitch (or a wake after a pause) never jumps the simulation. */
+const MAX_FRAME_MS = 100;
+
 /**
  * Mounts a game: what every game's mountGame() calls. Synchronous; the canvas is in the container on return and the
  * handle is usable right away (destroy before boot included). Owns everything Phaser does not clean up by itself.
@@ -40,41 +45,70 @@ const releaseWindowHandlers = () => {
 export function mountPhaserGame(container: HTMLElement, config: GameConfig, definition: GameDefinition): GameHandle {
   let destroyed = false;
   let completed = false;
+  let runEnded = false;
   let readied = false;
   let failed = false;
   let lastHits = 0;
+  let lastCollected: string | null = null;
   let paused = false;
   let palette: Palette = toPalette(config.tokens);
   let targets: (() => SceneTarget[]) | null = null;
+  let run: (() => SceneRun) | null = null;
+  let simClock: (() => number) | null = null;
   const textureSources = new Map<string, "file" | "scaled" | "placeholder">();
+  const motionStats: MotionStats = { created: 0, effects: [], flashes: [], shakes: [], staticFeedback: [], collisions: [] };
+  const timeScale = config.testHooks && config.timeScale && config.timeScale > 0 ? config.timeScale : 1;
+
+  // Game clock: real frame time × timeScale, from Phaser's step timestamps; a paused (sleeping) loop adds nothing.
+  let clock = 0;
+  let lastStep: number | null = null;
 
   const context: GameContext = {
     assetBase: config.assetBase,
     reducedMotion: config.reducedMotion,
     total: definition.total,
     manifest: definition.manifest,
+    difficulty: config.difficulty,
+    timeScale,
     random: createRandom(config.seed),
+    now: () => clock,
+    simNow: () => (simClock ? simClock() : clock),
+    setSimClock(next) {
+      simClock = next;
+    },
     palette: () => palette,
     ready() {
       if (destroyed || readied) return;
       readied = true;
       config.onReady();
     },
-    progress(hits) {
-      if (destroyed || completed || hits === lastHits) return;
+    progress(hits, total = definition.total) {
+      if (destroyed || completed || failed || hits === lastHits) return;
       lastHits = hits;
-      config.onProgress({ hits, total: definition.total });
+      config.onProgress({ hits, total });
+    },
+    collect(collected, inChannel) {
+      const key = `${collected}/${inChannel}`;
+      if (destroyed || runEnded || failed || key === lastCollected) return;
+      lastCollected = key;
+      config.onCollect({ collected, inChannel });
     },
     announce(text) {
       if (!destroyed) config.announce(text);
     },
-    complete(isCompleted, hits) {
-      if (destroyed || completed) return;
-      const result = gameResultSchema.safeParse({ completed: isCompleted, hits, total: definition.total });
+    complete({ completed: isCompleted, hits, total = definition.total, score = hits }) {
+      if (destroyed || completed || runEnded || failed) return;
+      const result = gameResultSchema.safeParse({ completed: isCompleted, hits, total, score });
       if (!result.success) return context.fail(result.error);
       completed = true;
       stopInput();
       config.onComplete(result.data);
+    },
+    runEnd(summary) {
+      if (destroyed || completed || runEnded || failed) return;
+      runEnded = true;
+      stopInput();
+      config.onRunEnd(summary);
     },
     fail(error) {
       if (destroyed || failed) return;
@@ -82,11 +116,15 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
       stopInput();
       config.onError(error);
     },
-    isOver: () => destroyed || completed || failed,
+    isOver: () => destroyed || completed || runEnded || failed,
     setTargets(provider) {
       targets = provider;
     },
+    setRun(provider) {
+      run = provider;
+    },
     textureSources,
+    motionStats,
   };
 
   const size = DESIGN_SIZES[layoutFor(container.clientWidth, container.clientHeight)];
@@ -102,6 +140,11 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
   }
   setGameContext(game, context);
   game.registry.set(PALETTE_KEY, palette);
+
+  game.events.on(Phaser.Core.Events.PRE_STEP, (time: number) => {
+    if (lastStep !== null) clock += Math.min(Math.max(time - lastStep, 0), MAX_FRAME_MS) * timeScale;
+    lastStep = time;
+  });
 
   function stopInput() {
     for (const scene of game.scene.getScenes(false)) {
@@ -137,6 +180,8 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     if (event.cancelable) event.preventDefault();
   };
   canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+  // Pointer-steered games: vertical pans stay with the page, horizontal drags reach the game.
+  if (definition.pointerSteer) canvas.style.touchAction = "pan-y";
 
   // A pause requested before the loop starts is applied on its first step (start() would undo an earlier sleep).
   game.events.once(Phaser.Core.Events.PRE_STEP, () => {
@@ -148,7 +193,7 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     const rect = canvas.getBoundingClientRect();
     const sx = rect.width / game.scale.gameSize.width;
     const sy = rect.height / game.scale.gameSize.height;
-    return points.map((p) => ({ id: p.id, x: rect.left - box.left + p.x * sx, y: rect.top - box.top + p.y * sy }));
+    return points.map((p) => ({ id: p.id, x: rect.left - box.left + p.x * sx, y: rect.top - box.top + p.y * sy, ...(p.kind ? { kind: p.kind } : {}) }));
   };
 
   const handle: GameHandle = {
@@ -185,6 +230,7 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     resume() {
       if (destroyed || !paused) return;
       paused = false;
+      lastStep = null; // the paused gap is not game time
       if (game.isRunning && !game.loop.running) {
         game.loop.wake();
         game.loop.resetDelta();
@@ -203,6 +249,19 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
   if (config.testHooks) {
     handle.debugTargets = () => (destroyed || !targets ? [] : toCss(targets()));
     handle.debugTextures = () => (destroyed ? [] : describeTextures(game, definition.manifest, textureSources));
+    handle.debugRun = () => {
+      if (destroyed || !run) return null;
+      const { width, height } = game.scale.gameSize;
+      return { difficulty: config.difficulty ?? null, layout: layoutFor(width, height), timeScale, elapsedMs: clock, ...run() };
+    };
+    handle.debugMotion = () => ({
+      active: motionStats.effects.filter((isActive) => isActive()).length,
+      created: motionStats.created,
+      flashes: [...motionStats.flashes],
+      shakes: [...motionStats.shakes],
+      staticFeedback: [...motionStats.staticFeedback],
+      collisions: [...motionStats.collisions],
+    });
   }
   return handle;
 }

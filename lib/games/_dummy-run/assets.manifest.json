@@ -1,0 +1,54 @@
+[
+  {
+    "key": "player",
+    "file": "player.webp",
+    "type": "image",
+    "width": 96,
+    "height": 48,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 8,
+    "placeholder": "caja orange de 96 × 48",
+    "use": "jugador (se mueve en horizontal)"
+  },
+  {
+    "key": "item-round",
+    "file": "item-round.webp",
+    "type": "image",
+    "width": 64,
+    "height": 64,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 6,
+    "placeholder": "círculo mint de 64 px",
+    "use": "objeto redondo (10 puntos)"
+  },
+  {
+    "key": "item-square",
+    "file": "item-square.webp",
+    "type": "image",
+    "width": 64,
+    "height": 64,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 6,
+    "placeholder": "caja yellow de 64 px",
+    "use": "objeto cuadrado (5 puntos)"
+  },
+  {
+    "key": "obstacle",
+    "file": "obstacle.webp",
+    "type": "image",
+    "width": 120,
+    "height": 40,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 6,
+    "placeholder": "caja mute de 120 × 40",
+    "use": "obstáculo (choque sin penalidad)"
+  }
+]

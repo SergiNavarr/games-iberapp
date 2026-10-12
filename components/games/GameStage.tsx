@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
 import { useTheme } from "@/hooks/useTheme";
 import { GAMES } from "@/lib/data/games";
 import { getPortal } from "@/lib/data/portals";
 import {
   gameResultSchema,
+  maxTotal,
   TOKEN_NAMES,
   type GameHandle,
   type GameModule,
@@ -14,24 +15,33 @@ import {
   type ProgressEntry,
   type ReadyEntry,
   type RegistryEntry,
+  type ReviewModule,
+  type ReviewProps,
   type TokenName,
 } from "@/lib/games/contract";
 import { REGISTRY } from "@/lib/games/registry";
 import { saveBestResult } from "@/lib/storage/game-progress";
 import type { GameId } from "@/types/portal";
 
-// The only wrapper for every minigame (plan §2.2). The canvas draws only the playable action; everything else
-// (header, instructions, score, loading, error, result, aria-live, "Próximamente") is DOM here, with the landing's
-// fonts and tokens. Phaser stays out of the initial bundle: the game module is preloaded with import() when the stage
-// is 600 px from the viewport and mounted only on "Empezar".
+// The only wrapper for every minigame (plan §2.2, E1). The canvas draws only the playable action; everything else
+// (header, instructions, difficulty, markers, loading, review, error, result, aria-live, "Próximamente") is DOM here,
+// with the landing's fonts and tokens. Phaser stays out of the initial bundle: the game module is preloaded with
+// import() when the stage is 600 px from the viewport and mounted only on "Empezar".
+//
+// Run games (entry.review): the canvas plays the run and reports onCollect / onRunEnd. On onRunEnd the wrapper
+// destroys the canvas (no WebGL context during review and result) and mounts the game's review component, which
+// reports each answer and the final result; the wrapper announces, scores, validates and saves.
 
-export type GameStageState = "coming-soon" | "intro" | "loading" | "playing" | "result" | "error";
+export type GameStageState = "coming-soon" | "intro" | "loading" | "playing" | "review" | "result" | "error";
 
 export type GameStageEvent =
   | { event: "state"; payload: GameStageState }
   | { event: "ready"; payload: null }
   | { event: "progress"; payload: { hits: number; total: number } }
+  | { event: "collect"; payload: { collected: number; inChannel: number } }
   | { event: "announce"; payload: string }
+  | { event: "run-end"; payload: unknown }
+  | { event: "answer"; payload: { hit: boolean; hits: number; total: number } }
   | { event: "complete"; payload: GameResult }
   | { event: "error"; payload: string }
   | { event: "report"; payload: null }
@@ -40,12 +50,16 @@ export type GameStageEvent =
 
 /** Test benches only; the landing never passes it. */
 export interface GameStageDevOptions {
-  /** Mounts a game that is not a GameId (the harness `_dummy`): its id keys the progress, its title the header. */
+  /** Mounts a game that is not a GameId (the harness dummies): its id keys the progress, its title the header. */
   entryOverride?: { id: string; title: string; entry: ReadyEntry };
   seed?: number;
   testHooks?: boolean;
   /** Overrides prefers-reduced-motion. */
   reducedMotion?: boolean;
+  /** Preselected option of the intro's difficulty selector (ignored if the game has no such id). */
+  difficulty?: string;
+  /** Game time scale; only sent to the game with testHooks. */
+  timeScale?: number;
   onHandle?: (handle: GameHandle | null) => void;
   onEvent?: (event: GameStageEvent) => void;
 }
@@ -80,6 +94,8 @@ export function readGameTokens(): GameTokens {
 
 const assetBaseFor = (id: string) => `/games/${id}/`;
 const OFFSCREEN_SETTLE_MS = 150;
+const EMPTY_TITLE = "Esta vez no hubo nada para contar";
+const EMPTY_TEXT = "Probá de nuevo: cada partida es distinta.";
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
 const subscribeReducedMotion = (cb: () => void) => {
@@ -109,20 +125,43 @@ interface ViewProps {
   devOptions?: GameStageDevOptions;
 }
 
+interface ReviewView {
+  Review: ComponentType<ReviewProps>;
+  summary: unknown;
+  difficulty: string | undefined;
+}
+
+function initialDifficulty(entry: ReadyEntry | null, preferred: string | undefined) {
+  const options = entry?.meta.difficulties;
+  if (!options?.length) return undefined;
+  if (preferred && options.some((d) => d.id === preferred)) return preferred;
+  return entry?.meta.defaultDifficulty ?? options[0].id;
+}
+
 function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewProps) {
   const ready = entry.status === "ready" ? entry : null;
+  const meta = ready?.meta;
+  const isRunGame = !!ready?.review;
   const [state, setState] = useState<GameStageState>(ready ? "intro" : "coming-soon");
   const [run, setRun] = useState(0);
+  const [difficulty, setDifficulty] = useState(() => initialDifficulty(ready, devOptions?.difficulty));
   const [hits, setHits] = useState(0);
+  const [denominator, setDenominator] = useState(() => (meta ? maxTotal(meta, initialDifficulty(ready, devOptions?.difficulty)) : 0));
+  const [collect, setCollect] = useState({ collected: 0, inChannel: 0 });
+  const [review, setReview] = useState<ReviewView | null>(null);
   const [result, setResult] = useState<GameResult | null>(null);
   const [live, setLive] = useState({ text: "", n: 0 });
   const rootRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const reviewRef = useRef<HTMLDivElement>(null);
   const resultTitleRef = useRef<HTMLHeadingElement>(null);
   const handleRef = useRef<GameHandle | null>(null);
   const moduleRef = useRef<Promise<GameModule> | null>(null);
+  const reviewModuleRef = useRef<Promise<ReviewModule> | null>(null);
   const pauseRef = useRef({ offscreen: false, hidden: false, result: false });
   const autoPaused = useRef(false);
+  // The play in progress: difficulty played, collected count (the review's denominator) and the review's tally.
+  const playRef = useRef({ token: 0, difficulty: undefined as string | undefined, collected: 0, answered: 0, hits: 0, done: false });
   const { theme } = useTheme();
   const systemReducedMotion = usePrefersReducedMotion();
 
@@ -140,6 +179,37 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     },
     [emit],
   );
+  const say = useCallback(
+    (text: string) => {
+      setLive((prev) => ({ text, n: prev.n + 1 }));
+      emit({ event: "announce", payload: text });
+    },
+    [emit],
+  );
+  const fail = useCallback(
+    (error: unknown) => {
+      emit({ event: "error", payload: error instanceof Error ? error.message : String(error) });
+      go("error");
+    },
+    [emit, go],
+  );
+
+  /** The final result, from the game (onComplete) or from the review (onDone): validate, show, save. */
+  const finish = useCallback(
+    (payload: GameResult) => {
+      if (!meta) return;
+      const parsed = gameResultSchema.safeParse(payload);
+      if (!parsed.success || parsed.data.total > maxTotal(meta, playRef.current.difficulty)) return fail(new Error("Resultado inválido"));
+      setHits(parsed.data.hits);
+      setDenominator(parsed.data.total);
+      setResult(parsed.data);
+      emit({ event: "complete", payload: parsed.data });
+      go("result");
+      emit({ event: "persisted", payload: saveBestResult(id, parsed.data) });
+    },
+    [meta, id, emit, go, fail],
+  );
+
   // Only on transitions, and only resuming what the wrapper itself paused: a repeated observer entry must not undo
   // a pause somebody else asked for through the handle.
   const applyPause = useCallback(() => {
@@ -168,6 +238,67 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     return moduleRef.current;
   }, [ready]);
 
+  const loadReview = useCallback(() => {
+    if (!ready?.review) return null;
+    if (!reviewModuleRef.current) {
+      const promise = ready.review();
+      promise.catch(() => {
+        if (reviewModuleRef.current === promise) reviewModuleRef.current = null;
+      });
+      reviewModuleRef.current = promise;
+    }
+    return reviewModuleRef.current;
+  }, [ready]);
+
+  /** onRunEnd: the canvas is already gone; mount the game's review component with the run summary. */
+  const startReview = useCallback(
+    (summary: unknown) => {
+      const play = playRef.current;
+      const token = play.token;
+      const promise = loadReview();
+      if (!promise) return fail(new Error("El juego terminó un recorrido pero no tiene revisión"));
+      Object.assign(play, { answered: 0, hits: 0, done: false });
+      setHits(0);
+      setDenominator(play.collected);
+      go("review");
+      promise.then(
+        ({ Review }) => {
+          if (playRef.current.token === token) setReview({ Review, summary, difficulty: play.difficulty });
+        },
+        (error) => {
+          if (playRef.current.token === token) fail(error);
+        },
+      );
+    },
+    [loadReview, go, fail],
+  );
+
+  const onAnswer = useCallback(
+    ({ hit, announcement }: { hit: boolean; announcement: string }) => {
+      const play = playRef.current;
+      if (play.done) return;
+      play.answered += 1;
+      if (hit) play.hits += 1;
+      emit({ event: "answer", payload: { hit, hits: play.hits, total: play.collected } });
+      if (hit) {
+        setHits(play.hits);
+        emit({ event: "progress", payload: { hits: play.hits, total: play.collected } });
+      }
+      say(announcement);
+    },
+    [emit, say],
+  );
+
+  const onDone = useCallback(
+    (payload: GameResult) => {
+      const play = playRef.current;
+      if (play.done) return;
+      play.done = true;
+      finish(payload);
+    },
+    [finish],
+  );
+
   // Preload the module (and Phaser) 600 px before the stage enters the viewport, like the landing's MapView.
   useEffect(() => {
     const root = rootRef.current;
@@ -192,12 +323,17 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     const promise = run > 0 ? load() : null;
     if (!stage || !promise || !ready) return;
     let disposed = false;
+    let released = false;
     let handle: GameHandle | null = null;
     const { devOptions: dev, theme: initialTheme, reducedMotion } = latest.current;
-    const fail = (error: unknown) => {
-      if (disposed) return;
-      emit({ event: "error", payload: error instanceof Error ? error.message : String(error) });
-      go("error");
+    const play = playRef.current;
+    const release = () => {
+      if (!handle || released) return;
+      released = true;
+      handle.destroy();
+      if (handleRef.current === handle) handleRef.current = null;
+      latest.current.devOptions?.onHandle?.(null);
+      emit({ event: "destroyed", payload: null });
     };
 
     promise.then((gameModule) => {
@@ -210,6 +346,8 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
           reducedMotion,
           seed: dev?.seed,
           testHooks: dev?.testHooks,
+          difficulty: play.difficulty,
+          timeScale: dev?.testHooks ? dev.timeScale : undefined,
           onReady: () => {
             if (disposed) return;
             emit({ event: "ready", payload: null });
@@ -218,24 +356,30 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
           onProgress: (progress) => {
             if (disposed) return;
             setHits(progress.hits);
+            setDenominator(progress.total);
             emit({ event: "progress", payload: progress });
           },
-          announce: (text) => {
+          onCollect: (progress) => {
             if (disposed) return;
-            setLive((prev) => ({ text, n: prev.n + 1 }));
-            emit({ event: "announce", payload: text });
+            play.collected = progress.collected;
+            setCollect(progress);
+            emit({ event: "collect", payload: progress });
+          },
+          announce: (text) => {
+            if (!disposed) say(text);
           },
           onComplete: (payload) => {
-            if (disposed) return;
-            const parsed = gameResultSchema.safeParse(payload);
-            if (!parsed.success || parsed.data.total !== ready.meta.total) return fail(new Error("Resultado inválido"));
-            setHits(parsed.data.hits);
-            setResult(parsed.data);
-            emit({ event: "complete", payload: parsed.data });
-            go("result");
-            emit({ event: "persisted", payload: saveBestResult(id, parsed.data) });
+            if (!disposed) finish(payload);
           },
-          onError: fail,
+          onRunEnd: (summary) => {
+            if (disposed) return;
+            emit({ event: "run-end", payload: summary });
+            release(); // no canvas and no WebGL context during review and result
+            startReview(summary);
+          },
+          onError: (error) => {
+            if (!disposed) fail(error);
+          },
         });
       } catch (error) {
         return fail(error);
@@ -244,17 +388,15 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       autoPaused.current = false;
       latest.current.devOptions?.onHandle?.(handle);
       applyPause();
-    }, fail);
+    }, (error) => {
+      if (!disposed) fail(error);
+    });
 
     return () => {
       disposed = true;
-      if (!handle) return;
-      handle.destroy();
-      if (handleRef.current === handle) handleRef.current = null;
-      latest.current.devOptions?.onHandle?.(null);
-      emit({ event: "destroyed", payload: null });
+      release();
     };
-  }, [run, id, ready, load, emit, go, applyPause]);
+  }, [run, id, ready, load, emit, go, say, fail, finish, startReview, applyPause]);
 
   // Pause off-screen, with the tab hidden and on the result screen (no requestAnimationFrame while paused).
   useEffect(() => {
@@ -288,6 +430,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     pauseRef.current.result = state === "result";
     applyPause();
     if (state === "result") resultTitleRef.current?.focus();
+    if (state === "review") reviewRef.current?.focus();
   }, [state, applyPause]);
 
   // Live theme: same canvas, new colors.
@@ -296,7 +439,14 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
   }, [theme]);
 
   const start = () => {
+    if (!meta) return;
+    const max = maxTotal(meta, difficulty);
+    playRef.current = { token: playRef.current.token + 1, difficulty, collected: 0, answered: 0, hits: 0, done: false };
+    loadReview(); // ready by the end of the run
     setHits(0);
+    setDenominator(max);
+    setCollect({ collected: 0, inChannel: max });
+    setReview(null);
     setResult(null);
     setLive((prev) => ({ text: "", n: prev.n }));
     setRun((n) => n + 1);
@@ -304,8 +454,8 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     stageRef.current?.focus({ preventScroll: true });
   };
 
-  const total = ready?.meta.total ?? 0;
   const busy = state === "loading";
+  const showCollect = isRunGame && (state === "loading" || state === "playing");
 
   return (
     <section
@@ -321,7 +471,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
         <h3 className="title-display m-0 text-[clamp(30px,4vw,48px)] leading-[0.95] text-head">{title}</h3>
       </header>
 
-      {!ready ? (
+      {!ready || !meta ? (
         <ComingSoon id={id} title={title} />
       ) : (
         <>
@@ -339,7 +489,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
             {state === "intro" && (
               <Panel>
                 <div className="flex max-w-[56ch] flex-col gap-3">
-                  {ready.meta.instructions.map((p) => (
+                  {meta.instructions.map((p) => (
                     <p key={p} className="m-0 text-[17px] leading-snug">
                       {p}
                     </p>
@@ -348,13 +498,38 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
                 <dl className="m-0 grid gap-2 text-[15px] leading-snug text-mute">
                   <div>
                     <dt className="eyebrow inline text-fg">Tocando · </dt>
-                    <dd className="m-0 inline">{ready.meta.controls.pointer}</dd>
+                    <dd className="m-0 inline">{meta.controls.pointer}</dd>
                   </div>
                   <div>
                     <dt className="eyebrow inline text-fg">Teclado · </dt>
-                    <dd className="m-0 inline">{ready.meta.controls.keyboard}</dd>
+                    <dd className="m-0 inline">{meta.controls.keyboard}</dd>
                   </div>
                 </dl>
+                {meta.difficulties && meta.difficulties.length > 0 && (
+                  <div role="radiogroup" aria-label="Dificultad" data-testid="difficulty" className="flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1 text-mute">Dificultad</span>
+                    {meta.difficulties.map((d) => (
+                      <label
+                        key={d.id}
+                        className="flex h-10 cursor-pointer items-center gap-2 rounded-[10px] border border-rule px-3 text-[15px] has-[:checked]:border-transparent has-[:checked]:bg-btn has-[:checked]:text-btn-fg"
+                      >
+                        <input
+                          type="radio"
+                          name={`difficulty-${id}`}
+                          value={d.id}
+                          data-testid={`difficulty-${d.id}`}
+                          checked={difficulty === d.id}
+                          onChange={() => {
+                            setDifficulty(d.id);
+                            setDenominator(maxTotal(meta, d.id));
+                          }}
+                          className="m-0 accent-mint"
+                        />
+                        {d.label}
+                      </label>
+                    ))}
+                  </div>
+                )}
                 <StageButton onClick={start} primary>
                   Empezar
                 </StageButton>
@@ -367,15 +542,34 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
               </div>
             )}
 
+            {state === "review" && (
+              <div ref={reviewRef} data-testid="review" tabIndex={-1} aria-label={`Revisión de ${title}`} className="absolute inset-0 overflow-y-auto bg-page-2 p-[clamp(20px,4vw,48px)] outline-offset-[-4px]">
+                {review ? (
+                  <review.Review summary={review.summary} meta={meta} difficulty={review.difficulty} onAnswer={onAnswer} onDone={onDone} />
+                ) : (
+                  <span className="eyebrow animate-ib-breathe text-mute">Cargando…</span>
+                )}
+              </div>
+            )}
+
             {state === "result" && result && (
               <Panel>
                 <h4 ref={resultTitleRef} data-testid="result-title" tabIndex={-1} className="title-display m-0 text-[clamp(26px,3.4vw,40px)] leading-none text-head">
-                  {result.completed ? "¡Desafío completo!" : "Fin de la partida"}
+                  {result.total === 0 ? (meta.emptyResult?.title ?? EMPTY_TITLE) : result.completed ? "¡Desafío completo!" : "Fin de la partida"}
                 </h4>
-                <p className="m-0 text-[17px]">
-                  {result.hits} / {result.total} {ready.meta.scoreLabel}
+                {result.total === 0 ? (
+                  <p data-testid="result-empty" className="m-0 max-w-[56ch] text-[17px] leading-snug">
+                    {meta.emptyResult?.text ?? EMPTY_TEXT}
+                  </p>
+                ) : (
+                  <p className="m-0 text-[17px]">
+                    {result.hits} / {result.total} {meta.scoreLabel}
+                  </p>
+                )}
+                <p data-testid="result-score" className="title-display m-0 text-[clamp(22px,2.6vw,30px)] leading-none text-head">
+                  {result.score} {meta.pointsLabel ?? "puntos"}
                 </p>
-                <p className="m-0 max-w-[56ch] text-[17px] leading-snug text-mute">{ready.meta.learning}</p>
+                <p className="m-0 max-w-[56ch] text-[17px] leading-snug text-mute">{meta.learning}</p>
                 <div className="flex flex-wrap gap-3">
                   <StageButton
                     primary
@@ -405,12 +599,21 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
           </div>
 
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-            <p className="m-0 text-[15px] text-mute">
-              <span data-testid="score" className="font-semibold text-fg">
-                {hits} / {total}
-              </span>{" "}
-              {ready.meta.scoreLabel}
-            </p>
+            {showCollect ? (
+              <p className="m-0 text-[15px] text-mute">
+                <span data-testid="collect" className="font-semibold text-fg">
+                  {collect.collected} / {collect.inChannel}
+                </span>{" "}
+                {meta.collectLabel ?? "recolectados"}
+              </p>
+            ) : (
+              <p className="m-0 text-[15px] text-mute">
+                <span data-testid="score" className="font-semibold text-fg">
+                  {hits} / {denominator}
+                </span>{" "}
+                {meta.scoreLabel}
+              </p>
+            )}
             <p data-testid="live" role="status" aria-live="polite" className="m-0 min-h-[1.4em] text-[15px] text-mute">
               {live.text}
               {live.n % 2 ? " " : ""}

@@ -1,17 +1,29 @@
-// JUDGE (tests/conformance): shared helpers for the T3 + T4 suite (checklist §2.6, items W) against the `_dummy` game.
-// Talks to the page only through the fixed interface of the ticket: /conformance/[gameId], window.__conformance and
-// the data-testid list. Coder modules (contract.ts, meta.ts) are imported by file path at run time, never statically,
-// so a renamed export can never break the coder's `tsc` or `next build` (C01).
+// JUDGE (tests/conformance): shared helpers for the W suite (checklist §2.6 + E1) against the `_dummy` variants.
+// Talks to the page only through the fixed interface of the tickets T3+T4 and E1: /conformance/[gameId],
+// window.__conformance and the agreed data-testid list. Coder modules (contract.ts, meta.ts, game-progress.ts) are
+// loaded by file path at run time, never imported statically, so a renamed export can never break the coder's `tsc`
+// or `next build` (C01). JUDGE_MODULES_ROOT overrides where they are read from (only to validate the suite against a
+// test double; the verdict always uses the repo).
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Page } from "@playwright/test";
+import { test as base, type Page } from "@playwright/test";
+import { DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./variants";
 
-export const DUMMY = "_dummy";
-export const ASSET_BASE = `/games/${DUMMY}/`;
-export const DUMMY_DIR = `lib/games/${DUMMY}`;
+export { expect } from "@playwright/test";
+export { DUMMY_VARIANT, RUN_VARIANT, type Variant };
+
+/** `variant` is a project option (playwright.conformance.config.ts): each W spec runs once per `_dummy` variant. */
+// Worker-scoped so beforeAll hooks can read it too. `{}`: no test-scoped fixtures (Playwright's own idiom).
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export const test = base.extend<{}, { variant: Variant }>({ variant: [DUMMY_VARIANT, { option: true, scope: "worker" }] });
+
+export const DUMMY = DUMMY_VARIANT.id;
+export const ASSET_BASE = DUMMY_VARIANT.assetBase;
+export const DUMMY_DIR = DUMMY_VARIANT.dir;
 export const SHARED_DIR = "lib/games/shared";
 export const SEED = 7;
+const MODULES_ROOT = process.env.JUDGE_MODULES_ROOT ?? process.cwd();
 
 export const GAME_ROOT = '[data-testid="game-stage"]';
 export const STAGE = '[data-testid="stage"]';
@@ -20,18 +32,53 @@ export const BOX = '[data-testid="box"]';
 export const SCORE = '[data-testid="score"]';
 export const LIVE = '[data-testid="live"]';
 export const RESULT_TITLE = '[data-testid="result-title"]';
+export const RESULT_SCORE = '[data-testid="result-score"]';
+export const RESULT_EMPTY = '[data-testid="result-empty"]';
+export const COLLECT = '[data-testid="collect"]';
+export const DIFFICULTY = '[data-testid="difficulty"]';
+export const REVIEW = '[data-testid="review"]';
+export const REVIEW_ITEM = '[data-testid="review-item"]';
+export const REVIEW_FEEDBACK = '[data-testid="review-feedback"]';
+export const REVIEW_NEXT = '[data-testid="review-next"]';
+export const REVIEW_OPTION_PREFIX = "review-option-";
 
-export type WrapperState = "coming-soon" | "intro" | "loading" | "playing" | "result" | "error";
-export type LogEntry = { t: number; event: string; payload?: unknown };
+export type WrapperState = "coming-soon" | "intro" | "loading" | "playing" | "review" | "result" | "error";
+export type LogEntry = { t: number; event: string; payload?: unknown; source?: string };
 export type DebugTexture = { key: string; width: number; height: number; frames: number; source: string };
+export type DebugRunItem = {
+  id: string;
+  kind: "item" | "obstacle";
+  type: string;
+  x: number;
+  arriveAt: number;
+  answer: string | null;
+  collected: boolean;
+  resolvedAt: number | null;
+};
+export type DebugRun = {
+  difficulty: string | null;
+  layout: "landscape" | "portrait";
+  timeScale: number;
+  durationMs: number;
+  elapsedMs: number;
+  ended: boolean;
+  player: { x: number; y: number };
+  kinematics: { playerSpeed: number; pickupHalfWidth: number; visibleMs: number };
+  items: DebugRunItem[];
+  spawns: { id: string; kind: string; x: number; t: number }[];
+};
+export type DebugMotion = { active: number; created: number; flashes: number[]; shakes: number[]; staticFeedback: number[]; collisions: number[] };
 export type Handle = {
   destroy(): void;
   pause(): void;
   resume(): void;
   setTheme(theme: "dark" | "light", tokens: Record<string, string>): void;
-  debugTargets?(): { id: string; x: number; y: number }[];
+  debugTargets?(): { id: string; x: number; y: number; kind?: string }[];
   debugTextures?(): DebugTexture[];
+  debugRun?(): DebugRun | null;
+  debugMotion?(): DebugMotion;
 };
+export type RawMountOpts = { seed?: number; reducedMotion?: boolean; theme?: "dark" | "light"; testHooks?: boolean; difficulty?: string; timeScale?: number };
 export type ConformanceApi = {
   gameId: string;
   log: LogEntry[];
@@ -43,7 +90,7 @@ export type ConformanceApi = {
   raw: {
     importOnly(): Promise<unknown>;
     /** Returns a Promise while the module is still loading (a raw.destroy() meanwhile cancels the mount). */
-    mount(opts?: { seed?: number; reducedMotion?: boolean; theme?: "dark" | "light"; testHooks?: boolean }): void | Promise<void>;
+    mount(opts?: RawMountOpts): void | Promise<void>;
     destroy(): void;
     handle(): Handle | null;
   };
@@ -52,19 +99,31 @@ export type ConformanceApi = {
 export type ConformanceWindow = { __conformance: ConformanceApi };
 
 /** Game callbacks as they appear in the bench log (C06: none may arrive after destroy()). */
-export const CALLBACK_EVENTS = ["ready", "progress", "announce", "complete", "error"];
+export const CALLBACK_EVENTS = ["ready", "progress", "announce", "complete", "error", "collect", "run-end", "answer"];
 
 // ---------- Navigation ----------
 
-export type BenchParams = { seed?: number; testHooks?: boolean; reducedMotion?: boolean };
+export type BenchParams = { seed?: number; testHooks?: boolean; reducedMotion?: boolean; difficulty?: string; timeScale?: number };
 
 export function benchUrl(gameId: string = DUMMY, params: BenchParams = {}): string {
   const q = new URLSearchParams();
   if (params.seed !== undefined) q.set("seed", String(params.seed));
   if (params.testHooks) q.set("testHooks", "1");
   if (params.reducedMotion !== undefined) q.set("reducedMotion", params.reducedMotion ? "1" : "0");
+  if (params.difficulty !== undefined) q.set("difficulty", params.difficulty);
+  if (params.timeScale !== undefined) q.set("timeScale", String(params.timeScale));
   const s = q.toString();
   return `/conformance/${gameId}${s ? `?${s}` : ""}`;
+}
+
+/** Default params: fixed seed and testHooks; run games at ×10 (the run lasts 1 s instead of 10). */
+export function fastParams(variant: Variant, extra: BenchParams = {}): BenchParams {
+  return { seed: SEED, testHooks: true, ...(variant.run ? { timeScale: 10 } : {}), ...extra };
+}
+
+/** Real-time params (×1): for tests that need the game to stay in `playing` for a few seconds, or a human-like bot. */
+export function realParams(extra: BenchParams = {}): BenchParams {
+  return { seed: SEED, testHooks: true, ...extra };
 }
 
 export async function gotoBench(page: Page, gameId: string = DUMMY, params: BenchParams = { seed: SEED, testHooks: true }) {
@@ -160,7 +219,27 @@ export function canvasCount(page: Page, within?: string): Promise<number> {
   return page.evaluate((sel) => (sel ? document.querySelector(sel)?.querySelectorAll("canvas").length ?? 0 : document.querySelectorAll("canvas").length), within ?? null);
 }
 
-// ---------- Playing with the keyboard (arrows change the selected target, Enter/Space activate it) ----------
+// ---------- Hooks (testHooks) ----------
+
+export function debugRun(page: Page, which: "stage" | "raw" = "stage"): Promise<DebugRun | null> {
+  return page.evaluate((w) => {
+    const c = (window as unknown as ConformanceWindow).__conformance;
+    const h = w === "raw" ? c.raw.handle() : c.handle();
+    const r = h?.debugRun?.() ?? null;
+    return r ? (JSON.parse(JSON.stringify(r)) as DebugRun) : null;
+  }, which);
+}
+
+export function debugMotion(page: Page, which: "stage" | "raw" = "stage"): Promise<DebugMotion | null> {
+  return page.evaluate((w) => {
+    const c = (window as unknown as ConformanceWindow).__conformance;
+    const h = w === "raw" ? c.raw.handle() : c.handle();
+    const m = h?.debugMotion?.() ?? null;
+    return m ? (JSON.parse(JSON.stringify(m)) as DebugMotion) : null;
+  }, which);
+}
+
+// ---------- Playing `_dummy` with the keyboard (arrows change the selected target, Enter/Space activate it) ----------
 
 function progressCount(log: LogEntry[]) {
   return log.filter((e) => e.event === "progress").length;
@@ -169,8 +248,8 @@ function progressCount(log: LogEntry[]) {
 const completeCount = (log: LogEntry[]) => log.filter((e) => e.event === "complete").length;
 
 /**
- * Completes the game with the keyboard, focus on `stageSelector`: Enter; if no new `progress` arrives within
- * `settleMs`, ArrowRight and Enter again. Stops at a NEW `complete` (the log keeps earlier games). Returns the log.
+ * Completes the single-phase game with the keyboard, focus on `stageSelector`: Enter; if no new `progress` arrives
+ * within `settleMs`, ArrowRight and Enter again. Stops at a NEW `complete` (the log keeps earlier games). Returns the log.
  */
 export async function completeWithKeyboard(page: Page, stageSelector = STAGE, settleMs = 400, maxInputs = 40): Promise<LogEntry[]> {
   await page.locator(stageSelector).focus();
@@ -192,6 +271,189 @@ export async function completeWithKeyboard(page: Page, stageSelector = STAGE, se
   return log;
 }
 
+// ---------- Playing `_dummy-run`: steering bot, review ----------
+
+export type InputMode = "keyboard" | "mouse" | "touch";
+
+/** id → correct answer, from debugRun().items (the planned schedule). Must be read while the game is alive (playing). */
+export async function captureAnswers(page: Page, which: "stage" | "raw" = "stage"): Promise<Record<string, string>> {
+  const run = await debugRun(page, which);
+  if (!run) throw new Error("debugRun() devolvió null mientras se jugaba");
+  return Object.fromEntries(run.items.filter((i) => i.kind === "item" && i.answer).map((i) => [i.id, i.answer as string]));
+}
+
+type SteerFrame = {
+  run: DebugRun | null;
+  canvas: { left: number; top: number; width: number; height: number; logicalW: number; logicalH: number } | null;
+  stage: { left: number; top: number } | null;
+  targets: { id: string; x: number; y: number }[];
+};
+
+/**
+ * Steers the player until the run ends. policy "all": go for the next uncollected item (by arriveAt) through
+ * `mode`; "left": hold ArrowLeft the whole run (never collects, E1 path to total 0). Uses debugTargets() positions for
+ * the pointer when the target is visible, else the logical x mapped to the canvas.
+ */
+export async function steerRun(page: Page, mode: InputMode, policy: "all" | "left" = "all", stageSelector = STAGE) {
+  const frame = () =>
+    page.evaluate((sel) => {
+      const c = (window as unknown as ConformanceWindow).__conformance;
+      const h = c.handle();
+      const run = h?.debugRun?.() ?? null;
+      const canvasEl = document.querySelector(sel)?.querySelector("canvas") ?? null;
+      const stageEl = document.querySelector(sel);
+      const r = canvasEl?.getBoundingClientRect();
+      const s = stageEl?.getBoundingClientRect();
+      return {
+        run: run ? JSON.parse(JSON.stringify(run)) : null,
+        canvas: r && canvasEl ? { left: r.left, top: r.top, width: r.width, height: r.height, logicalW: canvasEl.width, logicalH: canvasEl.height } : null,
+        stage: s ? { left: s.left, top: s.top } : null,
+        targets: (h?.debugTargets?.() ?? []).map((t) => ({ id: t.id, x: t.x, y: t.y })),
+      } as SteerFrame;
+    }, stageSelector);
+
+  let held: string | null = null;
+  let pressed = false;
+  let cdp: Awaited<ReturnType<ReturnType<Page["context"]>["newCDPSession"]>> | null = null;
+  // "left" must hold ArrowLeft the WHOLE run (E1 path to total 0): press first, before anything else takes time.
+  if (policy === "left") {
+    await page.locator(stageSelector).focus();
+    await page.keyboard.down("ArrowLeft");
+  }
+  // Canvas centered in the viewport: pointer coordinates must land on it, and an off-screen stage is auto-paused.
+  await page.evaluate((sel) => {
+    const r = document.querySelector(sel)?.getBoundingClientRect();
+    if (r) window.scrollTo({ top: window.scrollY + r.top + r.height / 2 - window.innerHeight / 2, behavior: "instant" });
+  }, stageSelector);
+  await page.waitForTimeout(policy === "left" ? 0 : 250);
+  if (mode === "keyboard" && policy !== "left") await page.locator(stageSelector).focus();
+  try {
+    for (let i = 0; i < 4_000; i++) {
+      const f = await frame();
+      if (!f.run || f.run.ended) break;
+      if (policy === "left") {
+        await page.waitForTimeout(30);
+        continue;
+      }
+      const next = f.run.items.filter((it) => it.kind === "item" && !it.collected && it.resolvedAt === null).sort((a, b) => a.arriveAt - b.arriveAt)[0];
+      if (!next || !f.canvas) {
+        await page.waitForTimeout(30);
+        continue;
+      }
+      const dx = next.x - f.run.player.x;
+      if (mode === "keyboard") {
+        const want = Math.abs(dx) <= f.run.kinematics.pickupHalfWidth * 0.4 ? null : dx < 0 ? "ArrowLeft" : "ArrowRight";
+        if (want !== held) {
+          if (held) await page.keyboard.up(held);
+          if (want) await page.keyboard.down(want);
+          held = want;
+        }
+      } else {
+        const visible = f.targets.find((t) => t.id === next.id);
+        const x = visible && f.stage ? f.stage.left + visible.x : f.canvas.left + (next.x * f.canvas.width) / f.canvas.logicalW;
+        const y = f.canvas.top + (f.run.player.y * f.canvas.height) / f.canvas.logicalH;
+        if (mode === "mouse") {
+          await page.mouse.move(x, y);
+          if (!pressed) await page.mouse.down();
+          pressed = true;
+        } else {
+          if (!cdp) cdp = await page.context().newCDPSession(page);
+          if (!pressed) {
+            const px = f.canvas.left + (f.run.player.x * f.canvas.width) / f.canvas.logicalW;
+            const dir = dx < 0 ? -1 : 1;
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: px, y }] });
+            // A horizontal start (|dx| > |dy| in the first 10 px) is what makes a touch steer.
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: px + dir * 14, y }] });
+            pressed = true;
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+        }
+      }
+      await page.waitForTimeout(30);
+    }
+  } finally {
+    if (held) await page.keyboard.up(held);
+    if (policy === "left") await page.keyboard.up("ArrowLeft");
+    if (pressed && mode === "mouse") await page.mouse.up();
+    if (cdp) {
+      if (pressed) await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await cdp.detach();
+    }
+  }
+}
+
+async function activate(page: Page, selector: string, mode: InputMode) {
+  const el = page.locator(selector).first();
+  if (mode === "keyboard") {
+    await el.focus();
+    await page.keyboard.press("Enter");
+  } else if (mode === "touch") await el.tap();
+  else await el.click();
+}
+
+export type ReviewAnswer = { id: string; chose: string; correct: string; wantCorrect: boolean; logFrom: number; logTo: number };
+
+/**
+ * Answers the review one item at a time until `result`. choose(i) decides whether item i gets the correct option or a
+ * wrong one. Returns what was answered, with the log segment [logFrom, logTo) of each answer (C26).
+ */
+export async function answerReview(page: Page, answers: Record<string, string>, mode: InputMode = "keyboard", choose: (i: number) => boolean = () => true) {
+  const done: ReviewAnswer[] = [];
+  for (let i = 0; i < 60; i++) {
+    const state = await wrapperState(page);
+    if (state === "result") return done;
+    if (state !== "review") {
+      await page.waitForTimeout(50);
+      continue;
+    }
+    const item = page.locator(REVIEW_ITEM).first();
+    await item.waitFor({ state: "visible", timeout: 10_000 });
+    const id = (await item.getAttribute("data-item-id")) ?? "";
+    const options = await page
+      .locator(`[data-testid^="${REVIEW_OPTION_PREFIX}"]`)
+      .evaluateAll((els, prefix) => els.map((e) => (e.getAttribute("data-testid") ?? "").slice(prefix.length)), REVIEW_OPTION_PREFIX);
+    const correct = answers[id];
+    if (!correct) throw new Error(`review-item data-item-id="${id}" no está en debugRun().items`);
+    const wantCorrect = choose(done.length);
+    const chose = wantCorrect ? correct : options.find((o) => o !== correct) ?? correct;
+    const logFrom = await logLength(page);
+    await activate(page, `[data-testid="${REVIEW_OPTION_PREFIX}${chose}"]`, mode);
+    await page.locator(REVIEW_FEEDBACK).first().waitFor({ state: "visible", timeout: 5_000 });
+    await page.waitForTimeout(100);
+    const logTo = await logLength(page);
+    done.push({ id, chose, correct, wantCorrect, logFrom, logTo });
+    await activate(page, REVIEW_NEXT, mode);
+    await page.waitForFunction(
+      ([root, itemSel, prev]) =>
+        document.querySelector<HTMLElement>(root)?.dataset.state === "result" || document.querySelector(itemSel)?.getAttribute("data-item-id") !== prev,
+      [GAME_ROOT, REVIEW_ITEM, id] as const,
+      { timeout: 10_000 },
+    );
+  }
+  throw new Error("la revisión no llegó a result");
+}
+
+export type FinishOptions = { mode?: InputMode; steer?: "none" | "all" | "left"; choose?: (i: number) => boolean };
+
+/**
+ * Plays the current game to `result`, starting while it is in `playing`. Single-phase: completes with the keyboard.
+ * Run game: steering policy (default none), wait for `run-end`, then answers the review (default: all correct).
+ * Returns the log.
+ */
+export async function finishGame(page: Page, variant: Variant, opts: FinishOptions = {}): Promise<LogEntry[]> {
+  if (!variant.run) return completeWithKeyboard(page);
+  const mode = opts.mode ?? "keyboard";
+  const answers = await captureAnswers(page);
+  const runEnds = (await readLog(page)).filter((e) => e.event === "run-end").length;
+  if (opts.steer && opts.steer !== "none") await steerRun(page, mode, opts.steer);
+  await page.waitForFunction((n) => (window as unknown as ConformanceWindow).__conformance.log.filter((e) => e.event === "run-end").length > n, runEnds, {
+    timeout: 90_000,
+  });
+  await answerReview(page, answers, mode, opts.choose);
+  await waitForState(page, "result", 10_000);
+  return readLog(page);
+}
+
 // ---------- Manifest, coder modules and generated assets ----------
 
 export type ManifestEntry = {
@@ -205,7 +467,7 @@ export type ManifestEntry = {
 };
 
 export function readManifest(dir = DUMMY_DIR): ManifestEntry[] {
-  return JSON.parse(fs.readFileSync(path.join(dir, "assets.manifest.json"), "utf8")) as ManifestEntry[];
+  return JSON.parse(fs.readFileSync(path.join(MODULES_ROOT, dir, "assets.manifest.json"), "utf8")) as ManifestEntry[];
 }
 
 /**
@@ -213,25 +475,44 @@ export function readManifest(dir = DUMMY_DIR): ManifestEntry[] {
  * resolves the `@/` alias of tsconfig inside it (a native import() of a file URL does not).
  */
 export function importModule<T>(relPath: string): T {
-  return createRequire(__filename)(path.resolve(process.cwd(), relPath)) as T;
+  return createRequire(__filename)(path.resolve(MODULES_ROOT, relPath)) as T;
 }
 
 export type ZodLike = { safeParse(value: unknown): { success: boolean; error?: unknown } };
-export type DummyMeta = { total: number; learning: string; backgroundProbe: { x: number; y: number }; controls: { keyboard: string } };
-export type ProgressEntry = { completed: boolean; hits: number; total: number; savedAt: string };
+export type GameMeta = {
+  total: number;
+  learning: string;
+  backgroundProbe: { x: number; y: number };
+  controls: { keyboard: string };
+  essentialMotion: boolean;
+  difficulties?: { id: string; label: string; total: number }[];
+  defaultDifficulty?: string;
+  emptyResult?: { title: string; text: string };
+};
+export type DummyMeta = GameMeta;
+export type ProgressEntry = { completed: boolean; hits: number; total: number; score: number; savedAt: string };
 
 export async function loadContract() {
   return importModule<{ gameResultSchema: ZodLike; progressEntrySchema: ZodLike }>("lib/games/contract.ts");
 }
 
-export async function loadDummyMeta(): Promise<DummyMeta> {
-  const { meta } = importModule<{ meta?: DummyMeta }>(`${DUMMY_DIR}/meta.ts`);
-  if (!meta) throw new Error(`${DUMMY_DIR}/meta.ts no exporta meta`);
+export async function loadMeta(variant: Variant = DUMMY_VARIANT): Promise<GameMeta> {
+  const { meta } = importModule<{ meta?: GameMeta }>(`${variant.dir}/meta.ts`);
+  if (!meta) throw new Error(`${variant.dir}/meta.ts no exporta meta`);
   return meta;
+}
+
+export async function loadDummyMeta(): Promise<GameMeta> {
+  return loadMeta(DUMMY_VARIANT);
 }
 
 export async function loadGameProgress() {
   return importModule<{ pickBest(previous: ProgressEntry | undefined, next: ProgressEntry): ProgressEntry }>("lib/storage/game-progress.ts");
+}
+
+/** Maximum result.total for the difficulty played (meta.total without difficulties), per C27. */
+export function maxTotalOf(meta: GameMeta, difficulty?: string | null): number {
+  return meta.difficulties?.find((d) => d.id === difficulty)?.total ?? meta.total;
 }
 
 /**
@@ -264,7 +545,7 @@ export type AssetPlan = Record<string, "404" | { width: number; height: number }
  * Serves assetBase with Playwright interception: per file, a 404 or a generated image of the given size. Files not in
  * the plan answer 404. Must be called before the game loads. Uses `generatorPage` (a page with a document) to encode.
  */
-export async function serveAssets(page: Page, plan: AssetPlan, generatorPage: Page, manifest = readManifest()) {
+export async function serveAssets(page: Page, plan: AssetPlan, generatorPage: Page, manifest = readManifest(), assetBase = ASSET_BASE) {
   const bodies = new Map<string, { body: Buffer; contentType: string }>();
   for (const entry of manifest) {
     const spec = plan[entry.file] ?? "404";
@@ -272,8 +553,8 @@ export async function serveAssets(page: Page, plan: AssetPlan, generatorPage: Pa
     const frames = entry.frames?.count ?? 1;
     bodies.set(entry.file, { body: await generateImage(generatorPage, spec.width, spec.height, entry.format, frames), contentType: `image/${entry.format}` });
   }
-  await page.route(`**${ASSET_BASE}**`, (route) => {
-    const file = decodeURIComponent(new URL(route.request().url()).pathname.slice(ASSET_BASE.length));
+  await page.route(`**${assetBase}**`, (route) => {
+    const file = decodeURIComponent(new URL(route.request().url()).pathname.slice(assetBase.length));
     const served = bodies.get(file);
     return served ? route.fulfill({ status: 200, body: served.body, contentType: served.contentType }) : route.fulfill({ status: 404, body: "not found" });
   });
@@ -333,6 +614,59 @@ export function instrumentProbe() {
 
 export function readProbe(page: Page) {
   return page.evaluate(() => JSON.parse(JSON.stringify((window as unknown as JudgeProbe).__judgeProbe)) as JudgeProbe["__judgeProbe"]);
+}
+
+export type JudgeRunProbe = {
+  __judgeRun: {
+    collectTexts: { t: number; text: string }[];
+    scoreTexts: { t: number; text: string }[];
+    canvasInReviewOrResult: { t: number; state: string; count: number }[];
+    states: { t: number; state: string }[];
+  };
+};
+
+/**
+ * Run games (E1): text history of the run marker (C28) and of the score (C28), canvases seen while the wrapper is in
+ * `review` or `result` (C33), and wrapper state changes. Everything stamped with performance.now() (same clock as log.t).
+ */
+export function instrumentRun() {
+  const rec = {
+    collectTexts: [] as { t: number; text: string }[],
+    scoreTexts: [] as { t: number; text: string }[],
+    canvasInReviewOrResult: [] as { t: number; state: string; count: number }[],
+    states: [] as { t: number; state: string }[],
+  };
+  (window as unknown as JudgeRunProbe).__judgeRun = rec;
+  let lastCollect: string | null = null;
+  let lastScore: string | null = null;
+  let lastState: string | null = null;
+  const check = () => {
+    const t = performance.now();
+    const collect = document.querySelector('[data-testid="collect"]')?.textContent ?? null;
+    if (collect !== lastCollect) {
+      lastCollect = collect;
+      if (collect !== null) rec.collectTexts.push({ t, text: collect });
+    }
+    const score = document.querySelector('[data-testid="score"]')?.textContent ?? null;
+    if (score !== lastScore) {
+      lastScore = score;
+      if (score !== null) rec.scoreTexts.push({ t, text: score });
+    }
+    const state = document.querySelector<HTMLElement>('[data-testid="game-stage"]')?.dataset.state ?? null;
+    if (state !== lastState) {
+      lastState = state;
+      if (state !== null) rec.states.push({ t, state });
+    }
+    if (state === "review" || state === "result") {
+      const count = document.querySelectorAll("canvas").length;
+      if (count > 0) rec.canvasInReviewOrResult.push({ t, state, count });
+    }
+  };
+  new MutationObserver(check).observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["data-state"] });
+}
+
+export function readRunProbe(page: Page) {
+  return page.evaluate(() => JSON.parse(JSON.stringify((window as unknown as JudgeRunProbe).__judgeRun)) as JudgeRunProbe["__judgeRun"]);
 }
 
 /**
