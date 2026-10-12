@@ -1,6 +1,7 @@
 import type { GameStageDevOptions } from "@/components/games/GameStage";
 import { GAMES } from "@/lib/data/games";
 import { DUMMY_RUN_ID, DUMMY_RUN_TITLE, dummyRunEntry } from "@/lib/games/_dummy-run/entry";
+import { DUMMY_SCENE_ID, DUMMY_SCENE_TITLE, dummySceneEntry } from "@/lib/games/_dummy-scene/entry";
 import { DUMMY_ID, DUMMY_TITLE, dummyEntry } from "@/lib/games/_dummy/entry";
 import type { ReadyEntry, RegistryEntry } from "@/lib/games/contract";
 import { REGISTRY } from "@/lib/games/registry";
@@ -10,6 +11,7 @@ import type { GameId } from "@/types/portal";
 const DUMMIES: Record<string, { title: string; entry: ReadyEntry }> = {
   [DUMMY_ID]: { title: DUMMY_TITLE, entry: dummyEntry },
   [DUMMY_RUN_ID]: { title: DUMMY_RUN_TITLE, entry: dummyRunEntry },
+  [DUMMY_SCENE_ID]: { title: DUMMY_SCENE_TITLE, entry: dummySceneEntry },
 };
 
 export const BENCH_IDS: string[] = [...GAMES.map((g) => g.id), ...Object.keys(DUMMIES)];

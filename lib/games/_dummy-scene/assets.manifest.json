@@ -1,0 +1,41 @@
+[
+  {
+    "key": "scene",
+    "file": "scene.webp",
+    "type": "image",
+    "width": 720,
+    "height": 900,
+    "format": "webp",
+    "alpha": false,
+    "frames": null,
+    "maxKB": 150,
+    "placeholder": "caja sky de 720 × 900",
+    "use": "escena fija con las zonas (solo placeholder: el dummy no tiene archivos)"
+  },
+  {
+    "key": "marker-hit",
+    "file": "marker-hit.webp",
+    "type": "image",
+    "width": 96,
+    "height": 96,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 8,
+    "placeholder": "círculo mint de 96 px",
+    "use": "marca de una zona que suma"
+  },
+  {
+    "key": "marker-miss",
+    "file": "marker-miss.webp",
+    "type": "image",
+    "width": 96,
+    "height": 96,
+    "format": "webp",
+    "alpha": true,
+    "frames": null,
+    "maxKB": 8,
+    "placeholder": "círculo orange de 96 px",
+    "use": "marca de un señuelo"
+  }
+]
