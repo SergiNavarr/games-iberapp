@@ -252,7 +252,8 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     handle.debugRun = () => {
       if (destroyed || !run) return null;
       const { width, height } = game.scale.gameSize;
-      return { difficulty: config.difficulty ?? null, layout: layoutFor(width, height), timeScale, elapsedMs: clock, ...run() };
+      // elapsedMs in the run's simulation time: the same base as items[].arriveAt and debugMotion (not the boot clock).
+      return { difficulty: config.difficulty ?? null, layout: layoutFor(width, height), timeScale, elapsedMs: context.simNow(), ...run() };
     };
     handle.debugMotion = () => ({
       active: motionStats.effects.filter((isActive) => isActive()).length,
