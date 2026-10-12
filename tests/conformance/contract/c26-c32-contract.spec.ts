@@ -347,21 +347,32 @@ test("C30 · persistencia: pasa el esquema, guarda el de más score (empate: el 
   test.setTimeout(300_000);
   await gotoBench(page, variant.id, variant.run ? botParams(variant) : fastParams(variant));
   await startGame(page);
+  let from = await logLength(page);
   await playToResult(page, variant);
   await page.waitForTimeout(500);
+  const r1 = lastComplete((await readLog(page)).slice(from));
   const first = await stored();
+  expect(r1, "[control] la primera partida terminó con complete").toBeDefined();
+  expect(r1!.score, `[control] la primera partida supera al resultado sembrado (score ${seeded.score}): ${JSON.stringify(r1)}`).toBeGreaterThan(seeded.score);
   expect.soft(progressEntrySchema.safeParse(first).success, `entrada guardada ${JSON.stringify(first)} pasa el esquema`).toBe(true);
-  expect.soft((first?.score ?? -1) > seeded.score, `reemplaza al resultado sembrado con menos score: ${JSON.stringify(first)}`).toBe(true);
+  expect.soft(first && { completed: first.completed, hits: first.hits, total: first.total, score: first.score }, "reemplaza al sembrado con menos score: guarda la partida 1").toEqual(r1);
 
-  // Tie: playing again with the same result keeps the latest.
+  // Second play: the stored entry must be the best so far, the latest on a tie (pickBest semantics, observed results).
   await page.getByRole("button", { name: "Jugar de nuevo", exact: true }).click();
   await waitForState(page, "playing");
+  from = await logLength(page);
   await playToResult(page, variant);
   await page.waitForTimeout(500);
+  const r2 = lastComplete((await readLog(page)).slice(from));
   const second = await stored();
+  test.info().annotations.push({ type: "info", description: `partida 1 ${JSON.stringify(r1)}; partida 2 ${JSON.stringify(r2)}; guardado ${JSON.stringify(second)}` });
+  expect(r2, "[control] la segunda partida terminó con complete").toBeDefined();
   expect.soft(progressEntrySchema.safeParse(second).success, `entrada guardada ${JSON.stringify(second)} pasa el esquema`).toBe(true);
-  expect.soft(second?.score, "empate: el mismo score").toBe(first?.score);
-  expect.soft(!!second && !!first && Date.parse(second.savedAt) > Date.parse(first.savedAt), `empate: savedAt ${second?.savedAt} posterior a ${first?.savedAt}`).toBe(true);
+  const secondWins = r2!.score >= r1!.score;
+  expect.soft(second && { completed: second.completed, hits: second.hits, total: second.total, score: second.score }, `guarda el mejor (${secondWins ? "partida 2: mayor o igual score, empate → la última" : "partida 1: la 2 tuvo menos score"})`).toEqual(secondWins ? r2 : r1);
+  if (secondWins)
+    expect.soft(!!second && !!first && Date.parse(second.savedAt) > Date.parse(first.savedAt), `savedAt ${second?.savedAt} posterior a ${first?.savedAt}`).toBe(true);
+  else expect.soft(second?.savedAt, "un resultado peor no pisa al guardado: mismo savedAt").toBe(first?.savedAt);
 
   await page.reload();
   const index = page.locator(`[data-testid="progress-${variant.id}"]`);
