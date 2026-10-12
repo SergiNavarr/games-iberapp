@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./tests/conformance/contract/variants";
+import { CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./tests/conformance/contract/variants";
 
 // JUDGE: conformance suite (tests/conformance). Separate from playwright.config.ts (the coder's e2e tests).
 // Own ports so it never touches the coder's dev server (3006): 3007 = next dev, 3008 = next start.
@@ -54,9 +54,9 @@ export default defineConfig<{}, { variant: Variant }>({
       },
     },
     { name: "start", testMatch: /spike[\\/]s9-.*\.spec\.ts$/, use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL } },
-    // T3 + T4 and E1 (checklist §2.6, items W): every spec once per `_dummy` variant (option `variant`; specs skip what
-    // does not apply). Everything on next dev except C02 and C31, which look for the Phaser chunk in response bodies and
-    // run on next start (dev chunks keep comments).
+    // T3 + T4, E1 and G1 (checklist §2.6, items W and J): every spec once per game (option `variant`: _dummy,
+    // _dummy-run, clean-channels; specs skip what does not apply). Everything on next dev except C02 and C31, which
+    // look for the Phaser chunk in response bodies and run on next start (dev chunks keep comments).
     {
       name: "contract-dev",
       testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
@@ -76,6 +76,16 @@ export default defineConfig<{}, { variant: Variant }>({
       name: "contract-run-start",
       testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: RUN_VARIANT },
+    },
+    {
+      name: "contract-cc-dev",
+      testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL, variant: CLEAN_VARIANT },
+    },
+    {
+      name: "contract-cc-start",
+      testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: CLEAN_VARIANT },
     },
   ],
 });

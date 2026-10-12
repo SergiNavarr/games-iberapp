@@ -57,3 +57,20 @@ La suite W corre **una vez por variante** del dummy, con la opción de proyecto 
 - **Validación (11/10/2026):** contra un doble con las dos variantes (fuera del repo), la versión correcta pasa todo en las dos. Los 18 defectos inyectados del camino nuevo se detectan, cada uno en su criterio. Lo que corregí en mis tests por esa validación: el bot de puntero centra el canvas antes de dirigir, y C12 desliza lejos del jugador para que un gesto vertical tomado como dirección se note.
 
 - **Validación de la suite (11/10/2026):** contra un doble de la interfaz fija (fuera del repo), la versión correcta pasa los 65 tests de `contract/`. De 32 defectos inyectados se detectan 31. El que no se detecta es "destroy no quita el canvas": C08 no lo ve porque desmontar el `GameStage` se lleva el escenario, pero lo detecta C05 por el camino `raw`.
+
+## G1 · clean-channels (checklist §2.6, ítems J, con E1)
+
+La suite corre también con la variante `clean-channels` (proyectos `contract-cc-dev` y `contract-cc-start`), además de la regresión completa (T2, `_dummy` y `_dummy-run`). Las propiedades de cada juego están en `contract/variants.ts`: escala del bot (×3, acordada), `hasBuildRun`, si tiene efecto ambiental y los anchos de C19 (1280 y 390 px).
+
+| ID | Dónde | Cómo se corre |
+| --- | --- | --- |
+| C22 | `scripts/check-assets.mjs` | `node scripts/check-assets.mjs clean-channels`: compara el manifiesto con el bloque ```json aprobado del artefacto G1 y lee formato y medidas de cada archivo de `public/games/clean-channels/` desde su cabecera (WebP VP8/VP8L/VP8X, PNG) |
+| C37 | `contract/c37-c39-game.spec.ts` | `buildRun` en Node: 200 semillas × 3 dificultades × 2 diseños. Composición de la tabla de la especificación, N2 con 0,7 y 0,6 s, y todo objeto con `arriveAt − visibleMs ≥ 0` y `arriveAt ≤ durationMs` |
+| C38 | ídem | `debugRun().items` = `buildRun()` (`id`, `kind`, `type`, `x`, `arriveAt`, `answer`), semillas 1, 7 y 42, a 1280 px (`landscape`) y 390 px (`portrait`) |
+| C39 | ídem | (a) las 3 dificultades, todo recolectado y bien clasificado: el máximo se calcula desde `buildRun` con los puntos de la especificación y tiene que dar 165 / 195 / 250; (b) todo mal; (c) nada recolectado, con la semilla elegida en Node y `ArrowLeft` sostenida |
+
+- **C36:** con `buildRun`, el test busca en Node (semillas 1–1000; dificultades `fast`, `normal`, `calm`) dos obstáculos que llegan a menos de 500 ms, dentro del rango del kayak y a menos de `pickupHalfWidth` entre sí. El bot estaciona el kayak en el punto medio (camino `raw`, ×3) y choca los dos sin moverse. Si no hay ninguna semilla, el test falla con "escalar": lo acordado es no cambiar la redacción por cuenta propia.
+- **C20(b):** clean-channels no tiene efecto ambiental. Como acordamos, el `[control]` provoca un choque: el bot dirige hacia un obstáculo, suelta las teclas y muestrea `debugMotion()` alrededor del choque. Con `reducedMotion`, el mismo choque tiene que dar 0 activos.
+- **C28 y C39(c), `total` 0:** `result-score` no se muestra (decisión del usuario en G1, vale para todos los juegos), y `result-title` y `result-empty` muestran `meta.emptyResult`.
+- **C34:** a ×1 mide `calm` y `fast` (75 y 60 s), compara el cronograma de ×10 con el de ×1 en `calm`, y corre la dificultad más corta sin `testHooks`. Timeout de 8 min.
+- **Validación (12/10/2026):** contra un doble de clean-channels con un `buildRun` propio compartido entre Node y navegador, la versión correcta pasa. Por esa validación corregí dos cosas en mis tests: el plan de C36 (el bot ahora estaciona el kayak en vez de perseguir dos obstáculos a menos de 500 ms) y el lector de cabeceras VP8L de `check-assets.mjs`.

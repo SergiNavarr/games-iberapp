@@ -1,13 +1,16 @@
 // JUDGE · C26 (coherent callbacks, per phase in E1), C27 (valid result), C28 (DOM slots), C29 ("Reportar" goes through
 // the landing), C30 (persistence by score) and C32 (clean console), per `_dummy` variant, fixed seed and testHooks.
-// Run games: ×10 when only the end matters; ×1 with the steering bot when the run must be played (collect all).
+// Run games: ×10 when only the end matters; the bot at the variant's agreed scale (×1 _dummy-run, ×3 clean-channels)
+// when the run must be played (collect all).
 // C30: (a) a seeded worse entry is replaced, (b) a tie keeps the latest, (c) pickBest in Node keeps a better stored entry.
 import type { Page } from "@playwright/test";
 import {
   answerReview,
+  botParams,
   captureAnswers,
   completeWithKeyboard,
   DIFFICULTY,
+  emptySeed,
   expect,
   fastParams,
   finishGame,
@@ -22,7 +25,6 @@ import {
   RAW_STAGE,
   readLog,
   readRunProbe,
-  realParams,
   RESULT_EMPTY,
   RESULT_SCORE,
   RESULT_TITLE,
@@ -124,7 +126,8 @@ test("C26 · después de onComplete ningún input cambia hits (camino raw, tecla
 
 test("C26 · por fase: cada recolección 1 onCollect (+1) y ≥ 1 announce; en la revisión, acierto 1 onProgress (+1), error 0, siempre ≥ 1 announce; onDone 1 vez", async ({ page, variant }) => {
   test.skip(!variant.run, "juego con recorrido");
-  await gotoBench(page, variant.id, realParams());
+  test.setTimeout(240_000);
+  await gotoBench(page, variant.id, botParams(variant));
   await startGame(page);
   // First answer right, second wrong, the rest right: both review paths get exercised.
   const { from, answered } = await playRun(page, (i) => i !== 1);
@@ -183,7 +186,8 @@ test("C27 · el payload de onComplete pasa el esquema zod (con score) y 0 ≤ hi
 test("C28 · espacios de DOM accesibles por rol, score en el resultado y foco en el título", async ({ page, variant }) => {
   const meta = await loadMeta(variant);
   // Run games at ×1 with the bot, so that something is collected and the regular result (with meta.learning) shows.
-  await gotoBench(page, variant.id, variant.run ? realParams() : fastParams(variant));
+  test.setTimeout(240_000);
+  await gotoBench(page, variant.id, variant.run ? botParams(variant) : fastParams(variant));
   await expect.soft(startButton(page), 'botón "Empezar"').toBeVisible();
   await startGame(page);
   expect.soft(await page.locator(LIVE).getAttribute("aria-live"), 'región data-testid="live" con aria-live').toBe("polite");
@@ -247,8 +251,9 @@ test("C28 · selector de dificultad: radios con la etiqueta de cada dificultad y
 
 test("C28 · marcador de recorrido al día después de cada recolección y hits / total después de cada acierto", async ({ page, variant }) => {
   test.skip(!variant.run, "juego con recorrido");
+  test.setTimeout(240_000);
   await page.addInitScript(instrumentRun);
-  await gotoBench(page, variant.id, realParams());
+  await gotoBench(page, variant.id, botParams(variant));
   await startGame(page);
   const { from } = await playRun(page);
   const log = (await readLog(page)).slice(from);
@@ -271,8 +276,12 @@ test("C28 · con total 0, el resultado muestra el texto alternativo de meta.empt
   test.skip(!variant.run, "juego con recorrido (camino de total 0: ArrowLeft sostenida)");
   const meta = await loadMeta(variant);
   expect(meta.emptyResult, "[control] meta.emptyResult").toBeDefined();
-  // ×1 and ArrowLeft pressed right at `ready` (steerRun "left" presses before anything else), held the whole run.
-  await gotoBench(page, variant.id, realParams());
+  // ArrowLeft pressed right at `ready` (steerRun "left" presses before anything else), held the whole run. Seed: the agreed
+  // dummy guarantee, or (games with buildRun) one where no item arrives within pickupHalfWidth of playerMinX.
+  test.setTimeout(240_000);
+  const seed = emptySeed(variant, meta.defaultDifficulty ?? "calm");
+  expect(seed, "[control] ninguna semilla 1–1000 sin residuos al alcance del kayak contra la orilla").not.toBeNull();
+  await gotoBench(page, variant.id, botParams(variant, { seed: seed ?? undefined }));
   const from = await logLength(page);
   await startGame(page);
   await steerRun(page, "keyboard", "left");
@@ -286,6 +295,8 @@ test("C28 · con total 0, el resultado muestra el texto alternativo de meta.empt
   expect(result?.total, "[control] con ArrowLeft sostenida no se recolecta nada").toBe(0);
   await expect.soft(page.locator(RESULT_TITLE), "result-title").toHaveText(meta.emptyResult?.title ?? "");
   await expect.soft(page.locator(RESULT_EMPTY), "result-empty").toHaveText(meta.emptyResult?.text ?? "");
+  // G1 (user decision): with total 0 the emptyResult title replaces the score, in every game.
+  await expect.soft(page.locator(RESULT_SCORE), "result-score no se muestra con total 0").toBeHidden();
 });
 
 // ---------- C29 ----------
@@ -332,8 +343,9 @@ test("C30 · persistencia: pasa el esquema, guarda el de más score (empate: el 
   const stored = () =>
     page.evaluate(([key, id]) => (JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, unknown>)[id] ?? null, [PROGRESS_KEY, variant.id] as const) as Promise<Stored>;
 
-  // Run games play at ×1 with the bot: collecting and answering right gives a score above the seeded 0.
-  await gotoBench(page, variant.id, variant.run ? realParams() : fastParams(variant));
+  // Run games: the bot at the agreed scale; collecting and answering right gives a score above the seeded 0.
+  test.setTimeout(300_000);
+  await gotoBench(page, variant.id, variant.run ? botParams(variant) : fastParams(variant));
   await startGame(page);
   await playToResult(page, variant);
   await page.waitForTimeout(500);

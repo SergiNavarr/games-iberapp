@@ -1,12 +1,12 @@
-// JUDGE · C07 (one canvas in Strict Mode, next dev), per variant, and C08 (20 mounts without leaks, alternating the two
-// `_dummy` variants with setGameId, since there is more than one game; runs once, from the `_dummy` project).
+// JUDGE · C07 (one canvas in Strict Mode, next dev), per game, and C08 (20 mounts without leaks, alternating every ready
+// game with setGameId, since there is more than one; runs once, from the `_dummy` project).
 import {
   canvasCount,
+  ALL_VARIANTS,
   DUMMY_VARIANT,
   expect,
   gotoBench,
   realParams,
-  RUN_VARIANT,
   test,
   instrumentProbe,
   logLength,
@@ -33,12 +33,12 @@ test("C07 · un solo canvas en Strict Mode (next dev)", async ({ page, variant }
   expect.soft(probe.canvasMax, "máximo simultáneo de canvas en el documento durante la prueba").toBeLessThanOrEqual(1);
 });
 
-test("C08 · 20 ciclos de Empezar y desmontar sin fugas, alternando las dos variantes", async ({ page, variant }) => {
-  test.skip(variant.run, "corre una vez, desde el proyecto de _dummy, alternando las dos variantes");
+test("C08 · 20 ciclos de Empezar y desmontar sin fugas, alternando los juegos ready", async ({ page, variant }) => {
+  test.skip(variant.run, "corre una vez, desde el proyecto de _dummy, alternando _dummy, _dummy-run y clean-channels");
   const c = watchConsole(page);
   await gotoBench(page, DUMMY_VARIANT.id, realParams());
   for (let i = 0; i < 20; i++) {
-    const gameId = i % 2 === 0 ? DUMMY_VARIANT.id : RUN_VARIANT.id;
+    const gameId = ALL_VARIANTS[i % ALL_VARIANTS.length].id;
     await test.step(`ciclo ${i + 1} (${gameId})`, async () => {
       await page.evaluate((id) => {
         const conf = (window as unknown as ConformanceWindow).__conformance;

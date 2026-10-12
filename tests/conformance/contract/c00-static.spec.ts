@@ -1,14 +1,14 @@
 // JUDGE · static items of §2.6 (W) against the `_dummy` variants: C03(a), C04, C09(a), C13(a), C14(a), C15, C17(a),
 // C20(a). Each search is the literal `rg` pattern of the checklist, applied to "carpetas del juego" = lib/games/_dummy/,
-// lib/games/_dummy-run/ and lib/games/shared/ (C20 a: outside shared/). Comments count, as with rg; C14(a) uses word
-// boundaries (\b), per the corrected wording. Runs once (in the `_dummy` project): it covers both variants.
+// lib/games/_dummy-run/, lib/games/clean-channels/ and lib/games/shared/ (C20 a: outside shared/). Comments count, as with rg; C14(a) uses word
+// boundaries (\b), per the corrected wording. Runs once (in the `_dummy` project): it covers every game.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { grepDir, type GrepHit } from "../spike/support";
-import { DUMMY_VARIANT, expect, RUN_VARIANT, SHARED_DIR, test } from "./support";
+import { ALL_VARIANTS, expect, SHARED_DIR, test } from "./support";
 
-const VARIANT_DIRS = [DUMMY_VARIANT.dir, RUN_VARIANT.dir];
+const VARIANT_DIRS = ALL_VARIANTS.map((v) => v.dir);
 const GAME_DIRS = [...VARIANT_DIRS, SHARED_DIR];
 
 test.skip(({ variant }) => variant.run, "las búsquedas estáticas cubren las dos variantes desde el proyecto de _dummy");
