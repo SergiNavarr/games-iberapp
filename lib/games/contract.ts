@@ -155,11 +155,12 @@ export interface DebugRun {
   /** Effective scale (1 without testHooks). */
   timeScale: number;
   durationMs: number;
-  /** Game time elapsed, pauses excluded. */
+  /** Simulation ms since the run started (same base as items[].arriveAt), pauses excluded. */
   elapsedMs: number;
   ended: boolean;
   player: { x: number; y: number };
-  kinematics: { playerSpeed: number; pickupHalfWidth: number; visibleMs: number };
+  /** px/s, px, ms; playerMinX/playerMaxX: range of the player's center in design px (G1). */
+  kinematics: { playerSpeed: number; pickupHalfWidth: number; visibleMs: number; playerMinX?: number; playerMaxX?: number };
   items: DebugRunItem[];
   /** Fixed-step simulation: identical at any timeScale for the same seed and difficulty. */
   spawns: DebugRunSpawn[];

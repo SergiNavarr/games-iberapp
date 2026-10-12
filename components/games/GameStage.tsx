@@ -566,10 +566,13 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
                     {result.hits} / {result.total} {meta.scoreLabel}
                   </p>
                 )}
-                <p data-testid="result-score" className="title-display m-0 text-[clamp(22px,2.6vw,30px)] leading-none text-head">
-                  {result.score} {meta.pointsLabel ?? "puntos"}
-                </p>
-                <p className="m-0 max-w-[56ch] text-[17px] leading-snug text-mute">{meta.learning}</p>
+                {/* With total 0 the empty title stands in for the score (user decision, G1): no score line. */}
+                {result.total > 0 && (
+                  <p data-testid="result-score" className="title-display m-0 text-[clamp(22px,2.6vw,30px)] leading-none text-head">
+                    {result.score} {meta.pointsLabel ?? "puntos"}
+                  </p>
+                )}
+                <p className="m-0 max-w-[56ch] whitespace-pre-line text-[17px] leading-snug text-mute">{meta.learning}</p>
                 <div className="flex flex-wrap gap-3">
                   <StageButton
                     primary

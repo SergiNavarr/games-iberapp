@@ -1,11 +1,13 @@
-// JUDGE · C19 (setTheme without remounting) and C20(b) (reducedMotion respected, E1 wording), per `_dummy` variant
-// (run games at ×1). C20(a) is in c00-static.spec.ts. C19 reads the pixel at meta.backgroundProbe (logical px, scaled
-// to the canvas) from a screenshot, 500 ms after the theme change, and compares it with the new theme's computed --bg2
-// (tolerance per channel: TOLERANCE). C20(b): with reducedMotion, debugMotion().active = 0 in 11 samples over 1 s; the
-// byte-identical captures only for games with meta.essentialMotion false.
+// JUDGE · C19 (setTheme without remounting) and C20(b) (reducedMotion respected, E1 wording), per game (run games at
+// ×1). C20(a) is in c00-static.spec.ts. C19 reads the pixel at meta.backgroundProbe (logical px, scaled to the canvas)
+// from a screenshot, 500 ms after the theme change, and compares it with the new theme's computed --bg2 (tolerance per
+// channel: TOLERANCE); clean-channels runs it in both designs (1280 and 390 px). C20(b): with reducedMotion,
+// debugMotion().active = 0 in 11 samples over 1 s; the byte-identical captures only for games with essentialMotion
+// false. The [control] (without reducedMotion something is active) uses the ambient effect, or, for games without one
+// (clean-channels, agreed in G1), a collision with an obstacle: steer to it, release the keys, sample around the hit.
 import zlib from "node:zlib";
 import type { Page } from "@playwright/test";
-import { expect, gotoBench, loadMeta, logLength, readLog, realParams, startGame, STAGE, test, type ConformanceWindow } from "./support";
+import { debugRun, expect, gotoBench, loadMeta, logLength, readLog, realParams, startGame, STAGE, test, type ConformanceWindow } from "./support";
 
 const TOLERANCE = 2;
 
@@ -46,8 +48,11 @@ async function probePixel(page: Page, probe: { x: number; y: number }) {
   return pixelOf(await page.screenshot({ clip: { x: point.x, y: point.y, width: 1, height: 1 } }));
 }
 
-test("C19 · setTheme sin remontar: mismo canvas, sin ready nuevo y el fondo pasa al --bg2 del tema nuevo en ≤ 500 ms", async ({ page, variant }) => {
+for (const viewport of [undefined, { width: 390, height: 844 }]) {
+test(`C19 · setTheme sin remontar: mismo canvas, sin ready nuevo y el fondo pasa al --bg2 del tema nuevo en ≤ 500 ms${viewport ? ` · ${viewport.width} px` : ""}`, async ({ page, variant }) => {
+  test.skip(!!viewport && !variant.c19Viewports?.some((v) => v.width === viewport.width), "este juego corre C19 solo a 1280 px");
   const meta = await loadMeta(variant);
+  if (viewport) await page.setViewportSize(viewport);
   await gotoBench(page, variant.id, realParams());
   await startGame(page);
   await page.evaluate((sel) => {
@@ -82,6 +87,7 @@ test("C19 · setTheme sin remontar: mismo canvas, sin ready nuevo y el fondo pas
   const readyAfter = (await readLog(page)).slice(from).filter((e) => e.event === "ready");
   expect.soft(readyAfter.length, "ready después de cambiar el tema").toBe(0);
 });
+}
 
 /** debugMotion().active sampled in the page every 100 ms, 11 samples (1 s). null if the hook is missing. */
 function sampleActive(page: Page): Promise<number[] | null> {
@@ -103,20 +109,83 @@ async function playingInView(page: Page) {
   await page.waitForTimeout(500);
 }
 
+/**
+ * Games without an ambient effect: steer the player under the next reachable obstacle, release the keys, and sample
+ * debugMotion().active from 500 ms (game time) before its arrival (no input during the window). The wait and the 11
+ * samples run inside the page (no test↔page round trips that could start the window late), and "collided in the
+ * window" means a collision whose game time lies within the game-time range actually sampled.
+ */
+async function sampleAroundCollision(page: Page) {
+  const run = await debugRun(page);
+  if (!run) throw new Error("debugRun() devolvió null");
+  const k = run.kinematics as typeof run.kinematics & { playerMinX?: number; playerMaxX?: number };
+  const target = run.items
+    .filter((i) => i.kind === "obstacle" && i.arriveAt - run.elapsedMs >= 2_500)
+    .filter((i) => i.x >= (k.playerMinX ?? -Infinity) && i.x <= (k.playerMaxX ?? Infinity))
+    .sort((a, b) => a.arriveAt - b.arriveAt)[0];
+  if (!target) throw new Error("no hay obstáculo alcanzable con ≥ 2,5 s de margen");
+  await page.locator(STAGE).focus();
+  for (let i = 0; i < 400; i++) {
+    const now = await debugRun(page);
+    if (!now) break;
+    const dx = target.x - now.player.x;
+    if (Math.abs(dx) <= k.pickupHalfWidth * 0.2) break;
+    const key = dx < 0 ? "ArrowLeft" : "ArrowRight";
+    await page.keyboard.down(key);
+    await page.waitForTimeout(20);
+    await page.keyboard.up(key);
+  }
+  const sampled = await page.evaluate(async (arriveAt) => {
+    const c = (window as unknown as ConformanceWindow).__conformance;
+    const deadline = performance.now() + 20_000;
+    while (performance.now() < deadline) {
+      const r = c.handle()?.debugRun?.();
+      if (!r || r.elapsedMs >= arriveAt - 500) break;
+      await new Promise((res) => setTimeout(res, 5));
+    }
+    const samples: number[] = [];
+    const elapsed: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const m = c.handle()?.debugMotion?.();
+      const r = c.handle()?.debugRun?.();
+      if (!m || !r) return null;
+      samples.push(m.active);
+      elapsed.push(r.elapsedMs);
+      if (i < 10) await new Promise((res) => setTimeout(res, 100));
+    }
+    return { samples, from: elapsed[0], to: elapsed[10], collisions: c.handle()?.debugMotion?.()?.collisions ?? [] };
+  }, target.arriveAt);
+  const collided = !!sampled && sampled.collisions.some((t: number) => t >= sampled.from && t <= sampled.to);
+  return { samples: sampled?.samples ?? null, collided, target: `${target.id} (llega a los ${target.arriveAt} ms; ventana ${sampled ? `${Math.round(sampled.from)}–${Math.round(sampled.to)}` : "?"} ms; choques ${JSON.stringify(sampled?.collisions ?? [])})` };
+}
+
 test("C20(b) · con reducedMotion, en playing y sin input: 0 efectos no esenciales activos durante 1 s (y capturas idénticas sin movimiento esencial)", async ({ page, variant }) => {
+  test.setTimeout(240_000);
   const meta = await loadMeta(variant);
 
   // [control] without reducedMotion the same game reports some non-essential effect, else "0 active" proves nothing.
   await gotoBench(page, variant.id, realParams({ reducedMotion: false }));
   await playingInView(page);
-  const moving = await sampleActive(page);
-  expect(moving, "debugMotion() con testHooks").not.toBeNull();
-  expect(Math.max(...(moving ?? [0])), `[control] sin reducedMotion no hay efectos no esenciales activos: ${JSON.stringify(moving)}`).toBeGreaterThan(0);
+  if (variant.ambientMotion === false) {
+    const control = await sampleAroundCollision(page);
+    expect(control.collided, `[control] el choque con ${control.target} no ocurrió en la ventana`).toBe(true);
+    expect(Math.max(...(control.samples ?? [0])), `[control] sin reducedMotion el choque no activa sacudida ni destello: ${JSON.stringify(control.samples)}`).toBeGreaterThan(0);
+  } else {
+    const moving = await sampleActive(page);
+    expect(moving, "debugMotion() con testHooks").not.toBeNull();
+    expect(Math.max(...(moving ?? [0])), `[control] sin reducedMotion no hay efectos no esenciales activos: ${JSON.stringify(moving)}`).toBeGreaterThan(0);
+  }
 
   await gotoBench(page, variant.id, realParams({ reducedMotion: true }));
   await playingInView(page);
-  const still = await sampleActive(page);
-  expect.soft(still, "debugMotion().active con reducedMotion, 11 muestras en 1 s").toEqual(Array(11).fill(0));
+  if (variant.ambientMotion === false) {
+    const still = await sampleAroundCollision(page);
+    expect(still.collided, `[control] con reducedMotion el choque con ${still.target} no ocurrió en la ventana`).toBe(true);
+    expect.soft(still.samples, "debugMotion().active con reducedMotion durante el choque, 11 muestras en 1 s").toEqual(Array(11).fill(0));
+  } else {
+    const still = await sampleActive(page);
+    expect.soft(still, "debugMotion().active con reducedMotion, 11 muestras en 1 s").toEqual(Array(11).fill(0));
+  }
 
   if (meta.essentialMotion === false) {
     const canvas = page.locator(STAGE).locator("canvas");

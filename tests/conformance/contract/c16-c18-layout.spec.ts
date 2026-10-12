@@ -1,9 +1,10 @@
 // JUDGE · C16 (no horizontal scroll; E1 adds the `review` state), C17(b) (size follows the container) and C18 (section
-// proportion), per `_dummy` variant. C17(a) is in c00-static.spec.ts. Run games play at ×1 here; in C16 the bot collects
-// so that `review` is reached.
+// proportion), per `_dummy` variant. C17(a) is in c00-static.spec.ts. Run games at ×1 here, except C16, where the bot collects
+// at the variant's agreed scale so that `review` is reached.
 import { containedWithin, stageAndCanvasRects } from "../spike/support";
 import {
   answerReview,
+  botParams,
   captureAnswers,
   completeWithKeyboard,
   expect,
@@ -29,7 +30,7 @@ for (const viewport of C16_VIEWPORTS) {
   test(`C16 · sin scroll horizontal a ${viewport.width} px en intro, playing, review y result`, async ({ page, variant }) => {
     await page.setViewportSize(viewport);
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    await gotoBench(page, variant.id, realParams());
+    await gotoBench(page, variant.id, botParams(variant));
     await waitForState(page, "intro");
     expect.soft(await overflow(), "intro: scrollWidth − innerWidth").toBeLessThanOrEqual(0);
     await startGame(page);

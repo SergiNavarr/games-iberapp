@@ -7,15 +7,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import {
+  ALL_VARIANTS,
   allPresent,
-  DUMMY_VARIANT,
   expect,
   fastParams,
   finishGame,
   gotoBench,
   readManifest,
   realParams,
-  RUN_VARIANT,
   serveAssets,
   startGame,
   test,
@@ -48,7 +47,7 @@ async function playThrough(page: Page, variant: Variant, plan: AssetPlan, manife
 
 const manifestExists = (v: Variant) => fs.existsSync(path.join(process.env.JUDGE_MODULES_ROOT ?? process.cwd(), v.dir, "assets.manifest.json"));
 
-for (const v of [DUMMY_VARIANT, RUN_VARIANT]) {
+for (const v of ALL_VARIANTS) {
   test.describe(`${v.id}`, () => {
     test.skip(({ variant }) => variant.id !== v.id, "corre en el proyecto de su variante");
     if (!manifestExists(v)) {

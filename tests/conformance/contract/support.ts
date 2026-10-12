@@ -8,10 +8,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { test as base, type Page } from "@playwright/test";
-import { DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./variants";
+import { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./variants";
 
 export { expect } from "@playwright/test";
-export { DUMMY_VARIANT, RUN_VARIANT, type Variant };
+export { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, type Variant };
 
 /** `variant` is a project option (playwright.conformance.config.ts): each W spec runs once per `_dummy` variant. */
 // Worker-scoped so beforeAll hooks can read it too. `{}`: no test-scoped fixtures (Playwright's own idiom).
@@ -124,6 +124,12 @@ export function fastParams(variant: Variant, extra: BenchParams = {}): BenchPara
 /** Real-time params (×1): for tests that need the game to stay in `playing` for a few seconds, or a human-like bot. */
 export function realParams(extra: BenchParams = {}): BenchParams {
   return { seed: SEED, testHooks: true, ...extra };
+}
+
+/** Params for tests where the steering bot plays the run: the agreed scale of the variant (×1 _dummy-run, ×3 clean-channels). */
+export function botParams(variant: Variant, extra: BenchParams = {}): BenchParams {
+  const scale = variant.botScale ?? 1;
+  return { seed: SEED, testHooks: true, ...(scale !== 1 ? { timeScale: scale } : {}), ...extra };
 }
 
 export async function gotoBench(page: Page, gameId: string = DUMMY, params: BenchParams = { seed: SEED, testHooks: true }) {
@@ -291,14 +297,22 @@ type SteerFrame = {
 
 /**
  * Steers the player until the run ends. policy "all": go for the next uncollected item (by arriveAt) through
- * `mode`; "left": hold ArrowLeft the whole run (never collects, E1 path to total 0). Uses debugTargets() positions for
- * the pointer when the target is visible, else the logical x mapped to the canvas.
+ * `mode`; "left": hold ArrowLeft the whole run (never collects, E1 path to total 0); "targets": aim at the given ids
+ * (items or obstacles) in order and stop once all of them are resolved. Uses debugTargets() positions for the pointer
+ * when the target is visible, else the logical x mapped to the canvas. `which`: the bench's React handle or the raw one.
  */
-export async function steerRun(page: Page, mode: InputMode, policy: "all" | "left" = "all", stageSelector = STAGE) {
+export async function steerRun(
+  page: Page,
+  mode: InputMode,
+  policy: "all" | "left" | "targets" = "all",
+  stageSelector = STAGE,
+  opts: { targets?: string[]; which?: "stage" | "raw"; aimX?: number } = {},
+) {
+  const which = opts.which ?? "stage";
   const frame = () =>
-    page.evaluate((sel) => {
+    page.evaluate(([sel, w]) => {
       const c = (window as unknown as ConformanceWindow).__conformance;
-      const h = c.handle();
+      const h = w === "raw" ? c.raw.handle() : c.handle();
       const run = h?.debugRun?.() ?? null;
       const canvasEl = document.querySelector(sel)?.querySelector("canvas") ?? null;
       const stageEl = document.querySelector(sel);
@@ -310,7 +324,7 @@ export async function steerRun(page: Page, mode: InputMode, policy: "all" | "lef
         stage: s ? { left: s.left, top: s.top } : null,
         targets: (h?.debugTargets?.() ?? []).map((t) => ({ id: t.id, x: t.x, y: t.y })),
       } as SteerFrame;
-    }, stageSelector);
+    }, [stageSelector, which] as const);
 
   let held: string | null = null;
   let pressed = false;
@@ -335,14 +349,21 @@ export async function steerRun(page: Page, mode: InputMode, policy: "all" | "lef
         await page.waitForTimeout(30);
         continue;
       }
-      const next = f.run.items.filter((it) => it.kind === "item" && !it.collected && it.resolvedAt === null).sort((a, b) => a.arriveAt - b.arriveAt)[0];
+      const pending =
+        policy === "targets"
+          ? (opts.targets ?? []).map((id) => f.run?.items.find((it) => it.id === id)).filter((it): it is DebugRunItem => !!it && it.resolvedAt === null)
+          : f.run.items.filter((it) => it.kind === "item" && !it.collected && it.resolvedAt === null).sort((a, b) => a.arriveAt - b.arriveAt);
+      const next = pending[0];
+      if (!next && policy === "targets") break;
       if (!next || !f.canvas) {
         await page.waitForTimeout(30);
         continue;
       }
-      const dx = next.x - f.run.player.x;
+      // "targets" with aimX: hold that x (logical px) until every target is resolved, instead of chasing each one.
+      const dx = (policy === "targets" && opts.aimX !== undefined ? opts.aimX : next.x) - f.run.player.x;
       if (mode === "keyboard") {
-        const want = Math.abs(dx) <= f.run.kinematics.pickupHalfWidth * 0.4 ? null : dx < 0 ? "ArrowLeft" : "ArrowRight";
+        const tolerance = f.run.kinematics.pickupHalfWidth * (next.kind === "obstacle" ? 0.2 : 0.4);
+        const want = Math.abs(dx) <= tolerance ? null : dx < 0 ? "ArrowLeft" : "ArrowRight";
         if (want !== held) {
           if (held) await page.keyboard.up(held);
           if (want) await page.keyboard.down(want);
@@ -504,6 +525,39 @@ export async function loadMeta(variant: Variant = DUMMY_VARIANT): Promise<GameMe
 
 export async function loadDummyMeta(): Promise<GameMeta> {
   return loadMeta(DUMMY_VARIANT);
+}
+
+export type BuiltRun = {
+  difficulty: string;
+  layout: "landscape" | "portrait";
+  durationMs: number;
+  kinematics: { playerSpeed: number; pickupHalfWidth: number; visibleMs: number; playerMinX: number; playerMaxX: number };
+  items: { id: string; kind: "item" | "obstacle"; type: string; x: number; arriveAt: number; answer: string | null }[];
+};
+export type BuildRun = (opts: { difficulty: string; seed: number; layout: "landscape" | "portrait" }) => BuiltRun;
+
+/** lib/games/<id>/data.ts → buildRun (pure, no Phaser), for games with hasBuildRun. */
+export function loadBuildRun(variant: Variant): BuildRun {
+  const { buildRun } = importModule<{ buildRun?: BuildRun }>(`${variant.dir}/data.ts`);
+  if (typeof buildRun !== "function") throw new Error(`${variant.dir}/data.ts no exporta buildRun`);
+  return buildRun;
+}
+
+/** First seed in [1, max] whose buildRun satisfies `ok`, or null. */
+export function findSeed(buildRun: BuildRun, difficulty: string, layout: "landscape" | "portrait", ok: (run: BuiltRun) => boolean, max = 1_000): number | null {
+  for (let seed = 1; seed <= max; seed++) if (ok(buildRun({ difficulty, seed, layout }))) return seed;
+  return null;
+}
+
+/**
+ * Seed for the "nothing collected" path (C28 empty result, C39 c): holding ArrowLeft from `ready`, the kayak sits at
+ * playerMinX, so no item may arrive within pickupHalfWidth of it. Games without buildRun use the agreed dummy guarantee.
+ */
+export function emptySeed(variant: Variant, difficulty: string, layout: "landscape" | "portrait" = "landscape"): number | null {
+  if (!variant.hasBuildRun) return SEED;
+  return findSeed(loadBuildRun(variant), difficulty, layout, (run) =>
+    run.items.filter((i) => i.kind === "item").every((i) => Math.abs(i.x - run.kinematics.playerMinX) > run.kinematics.pickupHalfWidth),
+  );
 }
 
 export async function loadGameProgress() {
