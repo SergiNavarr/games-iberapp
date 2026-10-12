@@ -271,10 +271,18 @@ test("C28 · con total 0, el resultado muestra el texto alternativo de meta.empt
   test.skip(!variant.run, "juego con recorrido (camino de total 0: ArrowLeft sostenida)");
   const meta = await loadMeta(variant);
   expect(meta.emptyResult, "[control] meta.emptyResult").toBeDefined();
-  await gotoBench(page, variant.id, fastParams(variant));
+  // ×1 and ArrowLeft pressed right at `ready` (steerRun "left" presses before anything else), held the whole run.
+  await gotoBench(page, variant.id, realParams());
+  const from = await logLength(page);
   await startGame(page);
-  await finishGame(page, variant, { steer: "left" });
-  const result = lastComplete(await readLog(page));
+  await steerRun(page, "keyboard", "left");
+  await waitForLogEvent(page, "run-end", from, 30_000);
+  await waitForState(page, "result", 15_000);
+  const log = (await readLog(page)).slice(from);
+  const readyT = log.find((e) => e.event === "ready")?.t ?? 0;
+  const collects = log.filter((e) => e.event === "collect").map((e) => `${JSON.stringify(e.payload)} a los ${Math.round(e.t - readyT)} ms de ready`);
+  test.info().annotations.push({ type: "info", description: `collect: ${collects.join("; ") || "(ninguno)"}` });
+  const result = lastComplete(log);
   expect(result?.total, "[control] con ArrowLeft sostenida no se recolecta nada").toBe(0);
   await expect.soft(page.locator(RESULT_TITLE), "result-title").toHaveText(meta.emptyResult?.title ?? "");
   await expect.soft(page.locator(RESULT_EMPTY), "result-empty").toHaveText(meta.emptyResult?.text ?? "");

@@ -315,14 +315,18 @@ export async function steerRun(page: Page, mode: InputMode, policy: "all" | "lef
   let held: string | null = null;
   let pressed = false;
   let cdp: Awaited<ReturnType<ReturnType<Page["context"]>["newCDPSession"]>> | null = null;
+  // "left" must hold ArrowLeft the WHOLE run (E1 path to total 0): press first, before anything else takes time.
+  if (policy === "left") {
+    await page.locator(stageSelector).focus();
+    await page.keyboard.down("ArrowLeft");
+  }
   // Canvas centered in the viewport: pointer coordinates must land on it, and an off-screen stage is auto-paused.
   await page.evaluate((sel) => {
     const r = document.querySelector(sel)?.getBoundingClientRect();
     if (r) window.scrollTo({ top: window.scrollY + r.top + r.height / 2 - window.innerHeight / 2, behavior: "instant" });
   }, stageSelector);
-  await page.waitForTimeout(250);
-  if (mode === "keyboard" || policy === "left") await page.locator(stageSelector).focus();
-  if (policy === "left") await page.keyboard.down("ArrowLeft");
+  await page.waitForTimeout(policy === "left" ? 0 : 250);
+  if (mode === "keyboard" && policy !== "left") await page.locator(stageSelector).focus();
   try {
     for (let i = 0; i < 4_000; i++) {
       const f = await frame();
