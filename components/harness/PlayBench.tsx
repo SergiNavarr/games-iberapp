@@ -1,18 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { GameStage, type GameStageEvent } from "@/components/games/GameStage";
 import { BENCH_IDS, benchStage } from "@/components/harness/bench-games";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { PORTALS } from "@/lib/data/portals";
+import type { DebugScene, GameHandle } from "@/lib/games/contract";
 import { useGameProgress } from "@/lib/storage/game-progress";
 
-// HARNESS (T4): visual bench for people (not used by tests): portal, theme, reduced motion, box width and a log of
-// the wrapper's events. The stage proportion still follows the viewport (tab: at 700 px), as it will in the section.
+// HARNESS (T4, G2): visual bench for people (not used by tests): portal, theme, reduced motion, box width and a log
+// of the wrapper's events. The stage proportion still follows the viewport (tab: at 700 px), as it will in the section.
+// "Zonas" (scene games): draws the sensitive zones over the stage, in the DOM, from debugScene() (the bench mounts
+// with testHooks), so a fixed scene can be played and its coordinates checked on the placeholder. Never in the canvas.
 
 const WIDTHS = [360, 768, 1024, 1440] as const;
 type Motion = "system" | "on" | "off";
+type Overlay = { left: number; top: number; width: number; height: number; scene: DebugScene };
 
 export function PlayBench({ gameId }: { gameId: string }) {
   const stage = benchStage(gameId);
@@ -20,7 +24,33 @@ export function PlayBench({ gameId }: { gameId: string }) {
   const [width, setWidth] = useState<number | null>(null);
   const [motion, setMotion] = useState<Motion>("system");
   const [log, setLog] = useState<{ t: number; text: string }[]>([]);
+  const [showZones, setShowZones] = useState(false);
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
+  const handleRef = useRef<GameHandle | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const progress = useGameProgress();
+
+  // Polls the scene while "Zonas" is on (bench only): the zones follow marks, resizes and layout changes.
+  useEffect(() => {
+    if (!showZones) return;
+    let last = "";
+    const timer = setInterval(() => {
+      const box = boxRef.current;
+      const stageEl = box?.querySelector('[data-testid="stage"]');
+      const scene = handleRef.current?.debugScene?.() ?? null;
+      let next: Overlay | null = null;
+      if (box && stageEl && scene) {
+        const b = box.getBoundingClientRect();
+        const s = stageEl.getBoundingClientRect();
+        next = { left: s.left - b.left, top: s.top - b.top, width: s.width, height: s.height, scene };
+      }
+      const key = JSON.stringify(next);
+      if (key === last) return;
+      last = key;
+      setOverlay(next);
+    }, 150);
+    return () => clearInterval(timer);
+  }, [showZones]);
 
   const onEvent = (e: GameStageEvent) => {
     const text = `${e.event}${e.payload === null ? "" : ` ${typeof e.payload === "string" ? e.payload : JSON.stringify(e.payload)}`}`;
@@ -80,18 +110,38 @@ export function PlayBench({ gameId }: { gameId: string }) {
             </BenchButton>
           </div>
         </fieldset>
+        <fieldset className="m-0 flex flex-col gap-1 border-0 p-0">
+          <legend className="eyebrow mb-1 text-mute">Zonas</legend>
+          <div className="flex gap-2">
+            <BenchButton active={showZones} onClick={() => setShowZones(true)}>
+              Ver
+            </BenchButton>
+            <BenchButton active={!showZones} onClick={() => setShowZones(false)}>
+              Ocultar
+            </BenchButton>
+          </div>
+        </fieldset>
         <p className="m-0 text-mute">Guardado: {saved ? `${saved.hits} / ${saved.total}${saved.completed ? " · completado" : ""}` : "sin jugar"}</p>
       </section>
 
       <div className="max-w-full overflow-x-auto">
-        <div style={width === null ? undefined : { width }}>
+        <div ref={boxRef} className="relative" style={width === null ? undefined : { width }}>
           <GameStage
             key={motion}
             gameId={stage.gameId}
             portalId={portalId}
             onReport={() => onEvent({ event: "report", payload: null })}
-            devOptions={{ entryOverride: stage.entryOverride, reducedMotion: motion === "system" ? undefined : motion === "on", onEvent }}
+            devOptions={{
+              entryOverride: stage.entryOverride,
+              reducedMotion: motion === "system" ? undefined : motion === "on",
+              testHooks: true,
+              onHandle: (handle) => {
+                handleRef.current = handle;
+              },
+              onEvent,
+            }}
           />
+          {showZones && overlay && <ZoneOverlay overlay={overlay} />}
         </div>
       </div>
 
@@ -106,6 +156,30 @@ export function PlayBench({ gameId }: { gameId: string }) {
         </ol>
       </section>
     </main>
+  );
+}
+
+/** The scene's zones over the stage (signals in mint, distractors in orange; marked ones filled), with their ids. */
+function ZoneOverlay({ overlay }: { overlay: Overlay }) {
+  const { left, top, width, height, scene } = overlay;
+  const { view } = scene;
+  return (
+    <svg aria-hidden="true" className="pointer-events-none absolute" style={{ left, top, width, height }} viewBox={`0 0 ${width} ${height}`}>
+      {scene.zones.map((z) => {
+        const color = z.kind === "signal" ? "var(--color-mint)" : "var(--color-orange)";
+        const cx = view.left + z.x * view.scale;
+        const cy = view.top + z.y * view.scale;
+        return (
+          <g key={z.id}>
+            <circle cx={cx} cy={cy} r={z.r * view.scale} fill={z.marked ? color : "none"} fillOpacity={0.25} stroke={color} strokeWidth={2} strokeDasharray="6 4" />
+            <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill={color} stroke="var(--bg2)" strokeWidth={3} paintOrder="stroke">
+              {z.id}
+            </text>
+          </g>
+        );
+      })}
+      <circle cx={view.left + scene.crosshair.x * view.scale} cy={view.top + scene.crosshair.y * view.scale} r={3} fill="var(--head)" />
+    </svg>
   );
 }
 
