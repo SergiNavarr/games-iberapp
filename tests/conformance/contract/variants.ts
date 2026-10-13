@@ -1,22 +1,33 @@
-// JUDGE: the games the W/J suite runs against: the two `_dummy` variants (E1) and the real games (G1+). No Playwright
+// JUDGE: the games the W/J suite runs against: the `_dummy` variants (E1, E2) and the real games (G1+). No Playwright
 // imports here, so the Playwright config can import it too.
 //  run: the game has a run phase + review (ReadyEntry.review).
+//  scene: E2 "fixed scene + review" game (`_dummy-scene`): hits from the canvas (meta.hitsFrom "game"), marks with a
+//    crosshair or the pointer, review that does not score, text panel and counter. Hooks: debugScene() and data.ts.
 //  botScale: time scale for tests where the steering bot plays the run (agreed: _dummy-run ×1, clean-channels ×3).
 //  hasBuildRun: lib/games/<id>/data.ts exports a pure buildRun() (seeds for C28 empty result, C36 and C39 are searched
 //    in Node with it); without it the agreed dummy guarantees are used.
 //  ambientMotion: the game has a non-essential effect active without input (C20 b control); otherwise the control
-//    provokes a collision.
-//  c19Viewports: widths where C19 runs (clean-channels: both designs, agreed for G1).
+//    provokes a collision (run games) or a mark (stillWithoutInput games).
+//  stillWithoutInput: copy of meta.stillWithoutInput (E2): no motion of its own, so the [control] of C08b/C08c uses
+//    input. The tests read the declaration from meta and check this copy matches it.
+//  c19Viewports: widths where C19 runs (clean-channels and _dummy-scene: both designs, agreed for G1 and E2).
 export type Variant = {
   id: string;
   dir: string;
   assetBase: string;
   run: boolean;
+  scene?: boolean;
   botScale?: number;
   hasBuildRun?: boolean;
   ambientMotion?: boolean;
+  stillWithoutInput?: boolean;
   c19Viewports?: { width: number; height: number }[];
 };
+
+const BOTH_DESIGNS = [
+  { width: 1280, height: 720 },
+  { width: 390, height: 844 },
+];
 
 export const DUMMY_VARIANT: Variant = { id: "_dummy", dir: "lib/games/_dummy", assetBase: "/games/_dummy/", run: false, ambientMotion: true };
 export const RUN_VARIANT: Variant = { id: "_dummy-run", dir: "lib/games/_dummy-run", assetBase: "/games/_dummy-run/", run: true, botScale: 1, ambientMotion: true };
@@ -28,9 +39,21 @@ export const CLEAN_VARIANT: Variant = {
   botScale: 3,
   hasBuildRun: true,
   ambientMotion: false,
-  c19Viewports: [
-    { width: 1280, height: 720 },
-    { width: 390, height: 844 },
-  ],
+  c19Viewports: BOTH_DESIGNS,
 };
-export const ALL_VARIANTS = [DUMMY_VARIANT, RUN_VARIANT, CLEAN_VARIANT];
+export const SCENE_VARIANT: Variant = {
+  id: "_dummy-scene",
+  dir: "lib/games/_dummy-scene",
+  assetBase: "/games/_dummy-scene/",
+  run: false,
+  scene: true,
+  ambientMotion: false,
+  stillWithoutInput: true,
+  c19Viewports: BOTH_DESIGNS,
+};
+export const ALL_VARIANTS = [DUMMY_VARIANT, RUN_VARIANT, CLEAN_VARIANT, SCENE_VARIANT];
+/**
+ * Project where the tests that cover every game in one pass run (static searches, C08 alternating the games, C30 c in
+ * Node, C31). E2: the scene project, because the regression of the other games is the frozen suite of 166332f (C43).
+ */
+export const ONCE_VARIANT = SCENE_VARIANT;

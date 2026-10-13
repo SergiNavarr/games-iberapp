@@ -1,17 +1,19 @@
 // JUDGE · static items of §2.6 (W) against the `_dummy` variants: C03(a), C04, C09(a), C13(a), C14(a), C15, C17(a),
-// C20(a). Each search is the literal `rg` pattern of the checklist, applied to "carpetas del juego" = lib/games/_dummy/,
-// lib/games/_dummy-run/, lib/games/clean-channels/ and lib/games/shared/ (C20 a: outside shared/). Comments count, as with rg; C14(a) uses word
-// boundaries (\b), per the corrected wording. Runs once (in the `_dummy` project): it covers every game.
+// C20(a). Each search is the literal `rg` pattern of the checklist, applied to "carpetas del juego" = the folder of
+// every variant (variants.ts: _dummy, _dummy-run, clean-channels, _dummy-scene) and lib/games/shared/ (C20 a: outside
+// shared/). Comments count, as with rg; C14(a) uses word boundaries (\b), per the corrected wording. E2 adds the agreed
+// mechanical stand-in for "genérico": rg -i "water-signs" in GameStage.tsx and lib/games/shared/ → 0.
+// Runs once (in the ONCE_VARIANT project): it covers every game.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { grepDir, type GrepHit } from "../spike/support";
-import { ALL_VARIANTS, expect, SHARED_DIR, test } from "./support";
+import { ALL_VARIANTS, expect, ONCE_VARIANT, SHARED_DIR, test } from "./support";
 
 const VARIANT_DIRS = ALL_VARIANTS.map((v) => v.dir);
 const GAME_DIRS = [...VARIANT_DIRS, SHARED_DIR];
 
-test.skip(({ variant }) => variant.run, "las búsquedas estáticas cubren las dos variantes desde el proyecto de _dummy");
+test.skip(({ variant }) => variant.id !== ONCE_VARIANT.id, `las búsquedas estáticas cubren todas las variantes desde el proyecto de ${ONCE_VARIANT.id}`);
 const grepGame = (pattern: RegExp) => GAME_DIRS.flatMap((d) => grepDir(d, pattern));
 
 function grepFiles(files: string[], pattern: RegExp): GrepHit[] {
@@ -71,4 +73,9 @@ test('C17(a) · rg "innerWidth|innerHeight|screen\\.|devicePixelRatio" en carpet
 
 test('C20(a) · rg "tweens\\.add|cameras\\.main\\.(shake|flash|fade|pan|zoomTo)" fuera de lib/games/shared/ → 0', () => {
   expect(VARIANT_DIRS.flatMap((d) => grepDir(d, /tweens\.add|cameras\.main\.(shake|flash|fade|pan|zoomTo)/))).toEqual([]);
+});
+
+test('E2 · genérico: rg -i "water-signs" en components/games/GameStage.tsx y lib/games/shared/ → 0', () => {
+  const pattern = /water-signs/i;
+  expect([...grepFiles(["components/games/GameStage.tsx"], pattern), ...grepDir(SHARED_DIR, pattern)]).toEqual([]);
 });

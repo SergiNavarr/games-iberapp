@@ -5,9 +5,26 @@
 // debugMotion().active = 0 in 11 samples over 1 s; the byte-identical captures only for games with essentialMotion
 // false. The [control] (without reducedMotion something is active) uses the ambient effect, or, for games without one
 // (clean-channels, agreed in G1), a collision with an obstacle: steer to it, release the keys, sample around the hit.
+// E2, games that declare meta.stillWithoutInput: the [control] provokes the non-essential transition of a mark (the mark
+// is the only input and opens the window: 1 s from its `counter` event); debugMotion() is sampled inside the page every
+// ~10 ms from before the key press (the transition lasts ~150 ms).
 import zlib from "node:zlib";
 import type { Page } from "@playwright/test";
-import { debugRun, expect, gotoBench, loadMeta, logLength, readLog, realParams, startGame, STAGE, test, type ConformanceWindow } from "./support";
+import {
+  debugRun,
+  debugScene,
+  expect,
+  gotoBench,
+  loadMeta,
+  logLength,
+  moveCrosshair,
+  readLog,
+  realParams,
+  startGame,
+  STAGE,
+  test,
+  type ConformanceWindow,
+} from "./support";
 
 const TOLERANCE = 2;
 
@@ -159,14 +176,73 @@ async function sampleAroundCollision(page: Page) {
   return { samples: sampled?.samples ?? null, collided, target: `${target.id} (llega a los ${target.arriveAt} ms; ventana ${sampled ? `${Math.round(sampled.from)}–${Math.round(sampled.to)}` : "?"} ms; choques ${JSON.stringify(sampled?.collisions ?? [])})` };
 }
 
+type MarkSample = { t: number; active: number; created: number };
+
+/**
+ * stillWithoutInput games: crosshair onto the first unmarked decoy (a mark that does not end the phase), start the
+ * in-page sampler, then press Enter. The window is [t of the first `counter` event after the press, +1000 ms].
+ */
+async function sampleAroundMark(page: Page) {
+  const scene = await debugScene(page);
+  if (!scene) throw new Error("debugScene() devolvió null");
+  const zone = scene.zones.find((z) => !z.marked && z.kind === "decoy") ?? scene.zones.find((z) => !z.marked);
+  if (!zone) throw new Error("no queda ninguna zona sin marcar");
+  await moveCrosshair(page, zone.x, zone.y);
+  const leftBefore = scene.marksLeft;
+  const from = await logLength(page);
+  const sampling = page.evaluate(async (start) => {
+    const w = window as unknown as ConformanceWindow & { __judgeSampling?: boolean };
+    const c = w.__conformance;
+    const samples: { t: number; active: number; created: number }[] = [];
+    let markT: number | null = null;
+    w.__judgeSampling = true;
+    const deadline = performance.now() + 10_000;
+    while (performance.now() < deadline) {
+      const m = c.handle()?.debugMotion?.();
+      if (!m) break;
+      samples.push({ t: performance.now(), active: m.active, created: m.created });
+      if (markT === null)
+        for (let i = start; i < c.log.length; i++)
+          if (c.log[i].event === "counter") {
+            markT = c.log[i].t;
+            break;
+          }
+      if (markT !== null && performance.now() >= markT + 1_050) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    w.__judgeSampling = false;
+    return { samples, markT };
+  }, from);
+  await page.waitForFunction(() => (window as unknown as { __judgeSampling?: boolean }).__judgeSampling === true);
+  await page.keyboard.press("Enter");
+  const { samples, markT } = await sampling;
+  const leftAfter = (await debugScene(page))?.marksLeft ?? null;
+  const inWindow: MarkSample[] = markT === null ? [] : samples.filter((s) => s.t >= markT && s.t <= markT + 1_000);
+  const createdBefore = samples[0]?.created ?? null;
+  const createdAfter = samples[samples.length - 1]?.created ?? null;
+  return {
+    marked: markT !== null && leftAfter === leftBefore - 1,
+    where: `${zone.id}; marcas restantes ${leftBefore} → ${leftAfter}; ${inWindow.length} muestras en la ventana; created ${createdBefore} → ${createdAfter}`,
+    inWindow,
+    createdDelta: createdBefore === null || createdAfter === null ? null : createdAfter - createdBefore,
+  };
+}
+
 test("C20(b) · con reducedMotion, en playing y sin input: 0 efectos no esenciales activos durante 1 s (y capturas idénticas sin movimiento esencial)", async ({ page, variant }) => {
   test.setTimeout(240_000);
   const meta = await loadMeta(variant);
+  const still = meta.stillWithoutInput === true;
+  expect(still, "[control] meta.stillWithoutInput coincide con variants.ts").toBe(variant.stillWithoutInput === true);
 
   // [control] without reducedMotion the same game reports some non-essential effect, else "0 active" proves nothing.
   await gotoBench(page, variant.id, realParams({ reducedMotion: false }));
   await playingInView(page);
-  if (variant.ambientMotion === false) {
+  if (still) {
+    const control = await sampleAroundMark(page);
+    expect(control.marked, `[control] la marca no ocurrió (${control.where})`).toBe(true);
+    expect(control.createdDelta ?? 0, `[control] sin reducedMotion la marca no crea un efecto no esencial (${control.where})`).toBeGreaterThanOrEqual(1);
+    expect(Math.max(0, ...control.inWindow.map((s) => s.active)), `[control] sin reducedMotion la transición de la marca nunca aparece activa (${control.where})`).toBeGreaterThan(0);
+  } else if (variant.ambientMotion === false) {
     const control = await sampleAroundCollision(page);
     expect(control.collided, `[control] el choque con ${control.target} no ocurrió en la ventana`).toBe(true);
     expect(Math.max(...(control.samples ?? [0])), `[control] sin reducedMotion el choque no activa sacudida ni destello: ${JSON.stringify(control.samples)}`).toBeGreaterThan(0);
@@ -178,7 +254,13 @@ test("C20(b) · con reducedMotion, en playing y sin input: 0 efectos no esencial
 
   await gotoBench(page, variant.id, realParams({ reducedMotion: true }));
   await playingInView(page);
-  if (variant.ambientMotion === false) {
+  if (still) {
+    const reduced = await sampleAroundMark(page);
+    expect(reduced.marked, `[control] con reducedMotion la marca no ocurrió (${reduced.where})`).toBe(true);
+    expect(reduced.inWindow.length, `[control] muestras de debugMotion() en la ventana (${reduced.where})`).toBeGreaterThanOrEqual(20);
+    test.info().annotations.push({ type: "info", description: `con reducedMotion: ${reduced.where}` });
+    expect.soft(reduced.inWindow.filter((s) => s.active !== 0), `muestras con debugMotion().active ≠ 0 en 1 s desde la marca, con reducedMotion (${reduced.where})`).toEqual([]);
+  } else if (variant.ambientMotion === false) {
     const still = await sampleAroundCollision(page);
     expect(still.collided, `[control] con reducedMotion el choque con ${still.target} no ocurrió en la ventana`).toBe(true);
     expect.soft(still.samples, "debugMotion().active con reducedMotion durante el choque, 11 muestras en 1 s").toEqual(Array(11).fill(0));

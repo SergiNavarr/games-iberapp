@@ -3,12 +3,17 @@
 // Run games: ×10 when only the end matters; the bot at the variant's agreed scale (×1 _dummy-run, ×3 clean-channels)
 // when the run must be played (collect all).
 // C30: (a) a seeded worse entry is replaced, (b) a tie keeps the latest, (c) pickBest in Node keeps a better stored entry.
+// E2 (scene game, meta.hitsFrom "game"): C26 per mark of the canvas (oracle: the kind of the zone in data.ts, never the
+// log), the review answered right and wrong in two games, and result = the game's; C28 adds the marker kept in the
+// review, the text panel (last announce), the counter (value / max), the empty result by meta.emptyResult.when and the
+// panel clear of the stage at 1280 and 390 px.
 import type { Page } from "@playwright/test";
 import {
   answerReview,
   botParams,
   captureAnswers,
   completeWithKeyboard,
+  COUNTER,
   DIFFICULTY,
   emptySeed,
   expect,
@@ -20,14 +25,22 @@ import {
   loadContract,
   loadGameProgress,
   loadMeta,
+  loadSceneData,
   logLength,
   maxTotalOf,
+  ONCE_VARIANT,
+  playScene,
   RAW_STAGE,
   readLog,
   readRunProbe,
+  REVIEW_FEEDBACK,
+  REVIEW_NEXT,
+  REVIEW_OPTION_PREFIX,
   RESULT_EMPTY,
   RESULT_SCORE,
   RESULT_TITLE,
+  sceneAnswers,
+  sceneZoneIds,
   SCORE,
   SEED,
   STAGE,
@@ -35,9 +48,11 @@ import {
   startGame,
   steerRun,
   test,
+  TEXT_PANEL,
   waitForLogEvent,
   waitForState,
   watchConsole,
+  wrapperState,
   type ConformanceWindow,
   type LogEntry,
   type Variant,
@@ -81,11 +96,38 @@ async function playRun(page: Page, choose: (i: number) => boolean = () => true) 
 }
 
 const lastComplete = (log: LogEntry[]) => [...log].reverse().find((e) => e.event === "complete")?.payload as Result | undefined;
+const norm = (text: string | null) => (text ?? "").replace(/\s+/g, " ").trim();
+
+/** Reads `read()` until `ok` or `timeout` ms (the DOM has 500 ms to catch up with the log); returns the last value. */
+async function settle<T>(read: () => Promise<T>, ok: (value: T) => boolean, timeout = 500): Promise<T> {
+  const end = Date.now() + timeout;
+  let value = await read();
+  while (!ok(value) && Date.now() < end) {
+    await new Promise((r) => setTimeout(r, 25));
+    value = await read();
+  }
+  return value;
+}
+
+/**
+ * Scene game: marks for a partial game that ends by running out of marks (default difficulty): decoys and signals
+ * alternated, starting with a decoy, as many as marks (so not every signal gets found).
+ */
+function partialSceneMarks(variant: Variant, marks: number) {
+  const signals = sceneZoneIds(variant, "signal");
+  const decoys = sceneZoneIds(variant, "decoy");
+  const out: string[] = [];
+  for (let i = 0; out.length < marks && (i < decoys.length || i < signals.length); i++) {
+    if (i < decoys.length) out.push(decoys[i]);
+    if (out.length < marks && i < signals.length) out.push(signals[i]);
+  }
+  return { ids: out, signals: out.filter((id) => signals.includes(id)).length, allSignals: signals.length };
+}
 
 // ---------- C26 ----------
 
 test("C26 · cada acierto da 1 onProgress (hits + 1) y ≥ 1 announce; onComplete exactamente 1 vez", async ({ page, variant }) => {
-  test.skip(variant.run, "juego sin recorrido; el de recorrido tiene su test por fase");
+  test.skip(variant.run || !!variant.scene, "juego de una fase; los de recorrido y de escena tienen su test por fase");
   await gotoBench(page, variant.id, fastParams(variant));
   await startGame(page);
   const segments = await playByInputs(page);
@@ -103,7 +145,7 @@ test("C26 · cada acierto da 1 onProgress (hits + 1) y ≥ 1 announce; onComplet
 });
 
 test("C26 · después de onComplete ningún input cambia hits (camino raw, teclado y clics en debugTargets)", async ({ page, variant }) => {
-  test.skip(variant.run, "juego sin recorrido (el camino raw de un juego con recorrido no tiene revisión)");
+  test.skip(variant.run || !!variant.scene, "juego de una fase (el camino raw de un juego con revisión no la tiene; E2: no aplica a la escena)");
   await gotoBench(page, variant.id, fastParams(variant));
   const from = await logLength(page);
   await page.evaluate((seed) => (window as unknown as ConformanceWindow).__conformance.raw.mount({ seed }), SEED);
@@ -166,6 +208,59 @@ test("C26 · por fase: cada recolección 1 onCollect (+1) y ≥ 1 announce; en l
   expect.soft(log.slice(from).filter((e) => e.event === "complete").length, "onDone → complete").toBe(1);
 });
 
+for (const answer of ["acertada", "errada"] as const)
+  test(`C26 · hitsFrom "game": señal 1 onProgress (+1) y ≥ 1 announce; señuelo 0 y ≥ 1 announce; respuesta ${answer} de la revisión 0 onProgress y ≥ 1 announce; onDone 1 vez; result = el del juego`, async ({ page, variant }) => {
+    test.skip(!variant.scene, "juego de escena (hitsFrom game)");
+    test.setTimeout(240_000);
+    const meta = await loadMeta(variant);
+    expect(meta.hitsFrom, "[control] meta.hitsFrom").toBe("game");
+    const data = loadSceneData(variant);
+    const marksLeft = data.MARKS[meta.defaultDifficulty ?? ""];
+    const plan = partialSceneMarks(variant, marksLeft);
+    expect(plan.ids.length, `[control] la partida gasta las ${marksLeft} marcas de ${meta.defaultDifficulty}`).toBe(marksLeft);
+    expect(plan.signals > 0 && plan.signals < plan.allSignals, `[control] partida parcial con señales y señuelos: ${plan.ids.join(", ")}`).toBe(true);
+
+    await gotoBench(page, variant.id, fastParams(variant));
+    await startGame(page);
+    const from = await logLength(page);
+    const segments = await playScene(page, variant, plan.ids, "keyboard");
+    await waitForLogEvent(page, "run-end", from, 10_000);
+    const answered = await answerReview(page, sceneAnswers(variant), "keyboard", () => answer === "acertada");
+    await waitForState(page, "result", 10_000);
+    await page.waitForTimeout(500);
+    const log = await readLog(page);
+
+    // Canvas phase: one segment per mark.
+    let hits = 0;
+    for (const [k, s] of segments.entries()) {
+      const entries = log.slice(s.logFrom, s.logTo);
+      const progress = entries.filter((e) => e.event === "progress");
+      const where = `marca ${k + 1} (${s.id}, ${s.kind === "signal" ? "señal" : "señuelo"})`;
+      if (s.kind === "signal") {
+        expect.soft(progress.length, `${where}: onProgress`).toBe(1);
+        if (progress[0]) expect.soft(progressOf(progress[0]).hits, `${where}: hits`).toBe(hits + 1);
+        hits++;
+      } else expect.soft(progress.length, `${where}: onProgress`).toBe(0);
+      expect.soft(entries.filter((e) => e.event === "announce").length, `${where}: announce`).toBeGreaterThanOrEqual(1);
+    }
+
+    // Review: does not score.
+    expect(answered.length, "[control] la revisión tuvo al menos una respuesta").toBeGreaterThan(0);
+    for (const [k, a] of answered.entries()) {
+      const seg = log.slice(a.logFrom, a.logTo);
+      expect(a.wantCorrect, `[control] respuesta ${k + 1} ${answer}`).toBe(answer === "acertada");
+      expect.soft(seg.filter((e) => e.event === "progress").length, `respuesta ${k + 1} (${a.chose}): onProgress`).toBe(0);
+      expect.soft(seg.filter((e) => e.event === "announce").length, `respuesta ${k + 1} (${a.chose}): announce`).toBeGreaterThanOrEqual(1);
+    }
+
+    // onDone exactly once, and its result is the game's: scoreOf(marked) from data.ts, total = signals in the scene.
+    const completes = log.slice(from).filter((e) => e.event === "complete");
+    expect.soft(completes.length, "onDone → complete").toBe(1);
+    const expected = { completed: true, total: plan.allSignals, ...data.scoreOf(plan.ids) };
+    test.info().annotations.push({ type: "info", description: `marcadas ${plan.ids.join(", ")}; esperado ${JSON.stringify(expected)}; complete ${JSON.stringify(completes[0]?.payload)}` });
+    expect.soft(completes[0]?.payload, "result = { completed: true, total, ...scoreOf(marcadas) }, igual con la respuesta acertada o errada").toEqual(expected);
+  });
+
 // ---------- C27 ----------
 
 test("C27 · el payload de onComplete pasa el esquema zod (con score) y 0 ≤ hits ≤ total ≤ máximo de la dificultad", async ({ page, variant }) => {
@@ -176,7 +271,7 @@ test("C27 · el payload de onComplete pasa el esquema zod (con score) y 0 ≤ hi
   const payload = lastComplete(log);
   const parsed = gameResultSchema.safeParse(payload);
   expect.soft(parsed.success, `esquema: ${JSON.stringify(payload)} ${parsed.error ? String(parsed.error) : ""}`).toBe(true);
-  const max = maxTotalOf(meta, variant.run ? meta.defaultDifficulty : undefined);
+  const max = maxTotalOf(meta, meta.difficulties ? meta.defaultDifficulty : undefined);
   const ok = !!payload && payload.hits >= 0 && payload.hits <= payload.total && payload.total <= max;
   expect.soft(ok, `0 ≤ hits ≤ total ≤ ${max}: ${JSON.stringify(payload)}`).toBe(true);
 });
@@ -207,7 +302,7 @@ test("C28 · espacios de DOM accesibles por rol, score en el resultado y foco en
 });
 
 test("C28 · el marcador muestra hits / total después de cada acierto", async ({ page, variant }) => {
-  test.skip(variant.run, "en el juego con recorrido lo cubre el test de marcadores de recorrido y revisión");
+  test.skip(variant.run || !!variant.scene, "juego de una fase; los de recorrido y de escena tienen su test de marcadores");
   await gotoBench(page, variant.id, fastParams(variant));
   await startGame(page);
   await page.locator(STAGE).focus();
@@ -233,7 +328,7 @@ test("C28 · el marcador muestra hits / total después de cada acierto", async (
 });
 
 test("C28 · selector de dificultad: radios con la etiqueta de cada dificultad y el default marcado", async ({ page, variant }) => {
-  test.skip(!variant.run, "solo juegos que declaran dificultades");
+  test.skip(!variant.run && !variant.scene, "solo juegos que declaran dificultades");
   const meta = await loadMeta(variant);
   expect(meta.difficulties?.length ?? 0, "[control] meta.difficulties").toBeGreaterThan(0);
   await gotoBench(page, variant.id, fastParams(variant));
@@ -299,6 +394,167 @@ test("C28 · con total 0, el resultado muestra el texto alternativo de meta.empt
   await expect.soft(page.locator(RESULT_SCORE), "result-score no se muestra con total 0").toBeHidden();
 });
 
+// E2, scene game.
+
+const scoreText = (page: Page) => page.locator(SCORE).first().textContent().then(norm);
+
+test('C28 · hitsFrom "game": el marcador muestra hits / total después de cada acierto del canvas y lo conserva en la revisión', async ({ page, variant }) => {
+  test.skip(!variant.scene, "juego de escena (hitsFrom game)");
+  test.setTimeout(240_000);
+  const meta = await loadMeta(variant);
+  const data = loadSceneData(variant);
+  const plan = partialSceneMarks(variant, data.MARKS[meta.defaultDifficulty ?? ""]);
+  await gotoBench(page, variant.id, fastParams(variant));
+  await startGame(page);
+  const seen: { last: Progress | null } = { last: null };
+  await playScene(page, variant, plan.ids, "keyboard", {
+    afterMark: async (s) => {
+      const progress = (await readLog(page)).slice(s.logFrom, s.logTo).filter((e) => e.event === "progress");
+      if (!progress.length) return;
+      const p = progressOf(progress[progress.length - 1]);
+      seen.last = p;
+      const want = `${p.hits} / ${p.total}`;
+      const shown = await settle(() => scoreText(page), (t) => t.includes(want));
+      expect.soft(shown, `marcador después de marcar ${s.id} (debe contener "${want}")`).toContain(want);
+    },
+  });
+  expect(seen.last, "[control] hubo aciertos en el canvas").not.toBeNull();
+  const want = `${seen.last?.hits} / ${seen.last?.total}`;
+  await waitForState(page, "review", 10_000);
+  expect.soft(await settle(() => scoreText(page), (t) => t.includes(want)), `marcador al entrar a la revisión (debe seguir en "${want}")`).toContain(want);
+  // Answer right (the case that would add a hit if the review scored), then check again before "Ver resultado".
+  const { QUESTION } = data;
+  await page.locator(`[data-testid="${REVIEW_OPTION_PREFIX}${QUESTION.answer}"]`).focus();
+  await page.keyboard.press("Enter");
+  await page.locator(REVIEW_FEEDBACK).first().waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(500);
+  expect.soft(await scoreText(page), `marcador después de contestar bien (debe seguir en "${want}")`).toContain(want);
+  await page.locator(REVIEW_NEXT).first().click();
+  await waitForState(page, "result", 10_000);
+});
+
+test("C28 · panel de texto con el último announce (playing y review) y contador con valor / máximo", async ({ page, variant }) => {
+  test.skip(!variant.scene, "juego de escena (textPanel y counterLabel)");
+  test.setTimeout(240_000);
+  const meta = await loadMeta(variant);
+  expect(meta.textPanel, "[control] meta.textPanel").toBe(true);
+  expect(typeof meta.counterLabel, "[control] meta.counterLabel").toBe("string");
+  const data = loadSceneData(variant);
+  const plan = partialSceneMarks(variant, data.MARKS[meta.defaultDifficulty ?? ""]);
+  await gotoBench(page, variant.id, fastParams(variant));
+  const from = await logLength(page);
+  await startGame(page);
+
+  const panelText = () => page.locator(TEXT_PANEL).first().textContent().then((t) => (t ?? "").trim());
+  const checkPanel = async (where: string, since: number) => {
+    const announce = [...(await readLog(page)).slice(since)].reverse().find((e) => e.event === "announce");
+    expect(announce, `[control] hubo announce (${where})`).toBeDefined();
+    const want = String(announce?.payload ?? "").trim();
+    const shown = await settle(panelText, (t) => t === want);
+    expect.soft(shown, `text-panel = último announce (${where})`).toBe(want);
+    await expect.soft(page.locator(TEXT_PANEL).first(), `text-panel visible (${where})`).toBeVisible({ timeout: 500 });
+  };
+  const checkCounter = async (where: string) => {
+    const counter = [...(await readLog(page)).slice(from)].reverse().find((e) => e.event === "counter");
+    expect(counter, `[control] hubo un evento counter (${where})`).toBeDefined();
+    const { value, max } = counter?.payload as { value: number; max: number };
+    const want = `${value} / ${max}`;
+    const shown = await settle(() => page.locator(COUNTER).first().textContent().then(norm), (t) => t.includes(want));
+    expect.soft(shown, `contador con "${want}" (${where})`).toContain(want);
+    // Agreed interface: the counter element holds "<value> / <max>" and the label goes next to it, on its line (as
+    // with the score marker).
+    const line = await page
+      .locator(COUNTER)
+      .first()
+      .evaluate((el) => (el.parentElement?.textContent ?? "").replace(/\s+/g, " ").trim())
+      .catch(() => "");
+    expect.soft(line, `línea del contador con la etiqueta "${meta.counterLabel}" (${where})`).toContain(meta.counterLabel ?? "");
+    await expect.soft(page.locator(COUNTER).first(), `contador visible (${where})`).toBeVisible({ timeout: 500 });
+  };
+
+  await checkCounter("al empezar");
+  await playScene(page, variant, plan.ids, "keyboard", {
+    afterMark: async (s) => {
+      await checkPanel(`después de marcar ${s.id}`, s.logFrom);
+      // The counter lives in loading/playing (the last mark moves the wrapper to review).
+      if ((await wrapperState(page)) === "playing") await checkCounter(`después de marcar ${s.id}`);
+    },
+  });
+  await waitForState(page, "review", 10_000);
+  const before = await logLength(page);
+  await page.locator(`[data-testid="${REVIEW_OPTION_PREFIX}${data.QUESTION.answer}"]`).click();
+  await page.locator(REVIEW_FEEDBACK).first().waitFor({ state: "visible", timeout: 5_000 });
+  await checkPanel("después de contestar la revisión", before);
+  await page.locator(REVIEW_NEXT).first().click();
+  await waitForState(page, "result", 10_000);
+});
+
+test("C28 · resultado vacío según meta.emptyResult.when: con la condición, título y texto de meta sin result-score; sin ella, result-score", async ({ page, variant }) => {
+  test.skip(!variant.scene, "juego de escena (emptyResult.when hits)");
+  test.setTimeout(240_000);
+  const meta = await loadMeta(variant);
+  const data = loadSceneData(variant);
+  expect(meta.emptyResult?.when, "[control] meta.emptyResult.when").toBe("hits");
+  const decoys = sceneZoneIds(variant, "decoy");
+  const tight = meta.difficulties?.find((d) => data.MARKS[d.id] <= decoys.length);
+  expect(tight, "[control] una dificultad con tantas marcas como señuelos o menos (hits 0 alcanzable)").toBeDefined();
+
+  // Condition met: only decoys → hits 0 with total > 0.
+  await gotoBench(page, variant.id, fastParams(variant, { difficulty: tight?.id }));
+  await startGame(page);
+  let from = await logLength(page);
+  await playScene(page, variant, decoys.slice(0, data.MARKS[tight?.id ?? ""]), "keyboard");
+  await waitForLogEvent(page, "run-end", from, 10_000);
+  await answerReview(page, sceneAnswers(variant));
+  await waitForState(page, "result", 10_000);
+  const empty = lastComplete((await readLog(page)).slice(from));
+  test.info().annotations.push({ type: "info", description: `${tight?.id}, solo señuelos: ${JSON.stringify(empty)}` });
+  expect(empty?.hits, "[control] solo señuelos: hits 0").toBe(0);
+  expect(empty?.total ?? 0, "[control] total > 0: la condición que decide es hits, no total").toBeGreaterThan(0);
+  await expect.soft(page.locator(RESULT_TITLE), "result-title = meta.emptyResult.title").toHaveText(meta.emptyResult?.title ?? "");
+  await expect.soft(page.locator(RESULT_EMPTY), "result-empty = meta.emptyResult.text").toHaveText(meta.emptyResult?.text ?? "");
+  await expect.soft(page.locator(RESULT_SCORE), "result-score no se muestra con la condición cumplida").toBeHidden();
+
+  // Condition not met: every signal → regular result.
+  await gotoBench(page, variant.id, fastParams(variant));
+  await startGame(page);
+  from = await logLength(page);
+  await finishGame(page, variant);
+  const full = lastComplete((await readLog(page)).slice(from));
+  expect(full?.hits ?? 0, "[control] todas las señales: hits > 0").toBeGreaterThan(0);
+  await expect.soft(page.locator(RESULT_SCORE).first(), "result-score con el score sin la condición").toContainText(String(full?.score ?? "?"));
+  await expect.soft(page.locator(RESULT_EMPTY), "result-empty no se muestra sin la condición").toBeHidden();
+});
+
+for (const viewport of [
+  { width: 1280, height: 720 },
+  { width: 390, height: 844 },
+])
+  test(`C28 · el panel de texto no tapa el escenario a ${viewport.width} px (rectángulos de text-panel y stage sin intersección)`, async ({ page, variant }) => {
+    test.skip(!variant.scene, "juego de escena (textPanel)");
+    await page.setViewportSize(viewport);
+    await gotoBench(page, variant.id, fastParams(variant));
+    await startGame(page);
+    await playScene(page, variant, sceneZoneIds(variant, "decoy").slice(0, 1), "keyboard");
+    await expect(page.locator(TEXT_PANEL).first(), "[control] text-panel visible después de una marca").toBeVisible({ timeout: 500 });
+    const rects = await page.evaluate(
+      ([panelSel, stageSel]) => {
+        const box = (sel: string) => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null;
+        };
+        return { panel: box(panelSel), stage: box(stageSel) };
+      },
+      [TEXT_PANEL, STAGE] as const,
+    );
+    const { panel, stage } = rects;
+    expect(panel && stage, `[control] rectángulos ${JSON.stringify(rects)}`).toBeTruthy();
+    expect(panel!.bottom - panel!.top, "[control] text-panel con alto > 0").toBeGreaterThan(0);
+    const overlapW = Math.max(0, Math.min(panel!.right, stage!.right) - Math.max(panel!.left, stage!.left));
+    const overlapH = Math.max(0, Math.min(panel!.bottom, stage!.bottom) - Math.max(panel!.top, stage!.top));
+    expect.soft(overlapW * overlapH, `intersección de text-panel ${JSON.stringify(panel)} con stage ${JSON.stringify(stage)} (px²)`).toBe(0);
+  });
+
 // ---------- C29 ----------
 
 test('C29 · "Reportar" llama a onReport una vez y la URL no cambia', async ({ page, variant }) => {
@@ -318,7 +574,8 @@ test('C29 · "Reportar" llama a onReport una vez y la URL no cambia', async ({ p
 // ---------- C30 ----------
 
 async function playToResult(page: Page, variant: Variant) {
-  if (variant.run) await playRun(page);
+  if (variant.scene) await finishGame(page, variant);
+  else if (variant.run) await playRun(page);
   else {
     await completeWithKeyboard(page);
     await waitForState(page, "result");
@@ -327,7 +584,7 @@ async function playToResult(page: Page, variant: Variant) {
 
 test("C30 · persistencia: pasa el esquema, guarda el de más score (empate: el último) y el índice lo muestra al recargar", async ({ page, variant }) => {
   const { progressEntrySchema } = await loadContract();
-  const seeded = variant.run
+  const seeded = variant.run || variant.scene
     ? { completed: true, hits: 0, total: 0, score: 0, savedAt: "2020-01-01T00:00:00.000Z" }
     : { completed: false, hits: 1, total: 3, score: 1, savedAt: "2020-01-01T00:00:00.000Z" };
   // Seed a worse result once (sessionStorage guard: the init script also runs on reload).
@@ -380,7 +637,7 @@ test("C30 · persistencia: pasa el esquema, guarda el de más score (empate: el 
 });
 
 test("C30(c) · pickBest (Node): gana el de más score; un peor no pisa al guardado; en un empate, el último", async ({ variant }) => {
-  test.skip(variant.run, "prueba de Node: corre una vez, en el proyecto de _dummy");
+  test.skip(variant.id !== ONCE_VARIANT.id, `prueba de Node: corre una vez, en el proyecto de ${ONCE_VARIANT.id}`);
   const { pickBest } = await loadGameProgress();
   const stored = { completed: true, hits: 3, total: 3, score: 30, savedAt: "2026-01-01T00:00:00.000Z" };
   const worse = { completed: true, hits: 3, total: 3, score: 10, savedAt: "2026-02-01T00:00:00.000Z" };

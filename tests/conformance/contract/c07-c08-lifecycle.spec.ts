@@ -1,9 +1,10 @@
 // JUDGE · C07 (one canvas in Strict Mode, next dev), per game, and C08 (20 mounts without leaks, alternating every ready
-// game with setGameId, since there is more than one; runs once, from the `_dummy` project).
+// game with setGameId, since there is more than one; runs once, from the ONCE_VARIANT project).
 import {
   canvasCount,
   ALL_VARIANTS,
   DUMMY_VARIANT,
+  ONCE_VARIANT,
   expect,
   gotoBench,
   realParams,
@@ -34,7 +35,7 @@ test("C07 · un solo canvas en Strict Mode (next dev)", async ({ page, variant }
 });
 
 test("C08 · 20 ciclos de Empezar y desmontar sin fugas, alternando los juegos ready", async ({ page, variant }) => {
-  test.skip(variant.run, "corre una vez, desde el proyecto de _dummy, alternando _dummy, _dummy-run y clean-channels");
+  test.skip(variant.id !== ONCE_VARIANT.id, `corre una vez, desde el proyecto de ${ONCE_VARIANT.id}, alternando ${ALL_VARIANTS.map((v) => v.id).join(", ")}`);
   const c = watchConsole(page);
   await gotoBench(page, DUMMY_VARIANT.id, realParams());
   for (let i = 0; i < 20; i++) {

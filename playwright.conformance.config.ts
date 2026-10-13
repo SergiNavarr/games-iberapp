@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./tests/conformance/contract/variants";
+import { CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, SCENE_VARIANT, type Variant } from "./tests/conformance/contract/variants";
 
 // JUDGE: conformance suite (tests/conformance). Separate from playwright.config.ts (the coder's e2e tests).
 // Own ports so it never touches the coder's dev server (3006): 3007 = next dev, 3008 = next start.
@@ -86,6 +86,19 @@ export default defineConfig<{}, { variant: Variant }>({
       name: "contract-cc-start",
       testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: CLEAN_VARIANT },
+    },
+    // E2: the scene game. Its projects also run the tests that cover every game in one pass (ONCE_VARIANT: static
+    // searches, C08, C30 c, C31). The E2 verdict runs only these two projects; the regression of the other games is the
+    // frozen suite of 166332f (C43, scripts/check-c43.mjs).
+    {
+      name: "contract-scene-dev",
+      testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL, variant: SCENE_VARIANT },
+    },
+    {
+      name: "contract-scene-start",
+      testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: SCENE_VARIANT },
     },
   ],
 });
