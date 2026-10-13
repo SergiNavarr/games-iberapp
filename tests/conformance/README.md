@@ -135,3 +135,50 @@ C28 en la suite E2:
   - Enter muerto y toque muerto;
   - dificultad ignorada;
   - canvas que sobrevive a la revisión.
+
+## G2 · water-signs (checklist §2.6, ítems J, con E1 y E2)
+
+La suite corre con la variante `water-signs` (proyectos `contract-water-dev` y `contract-water-start`). Es un juego de escena como `_dummy-scene` y corren los mismos criterios.
+
+En `contract/variants.ts`:
+
+- `sceneModule: "hotspots.ts"`: el cargador traduce `distractor` → `decoy`, toma los puntos de `POINTS` y la `QUESTION` de `meta.ts`.
+- `sceneFullDifficulty: "fast"`: C24 y C25 se juegan en Atento, con 8 marcas exactas.
+- `sceneEmptyInBrowser: false`: el resultado vacío por `hits` no se puede producir como partida y se verifica en Node.
+
+| ID | Dónde | Cómo se verifica (lecturas acordadas con el coordinador) |
+| --- | --- | --- |
+| C22 | `scripts/check-assets.mjs` | `node scripts/check-assets.mjs water-signs`, contra el bloque aprobado del artefacto G2 |
+| C40 | `contract/c40-c42-water.spec.ts` (Node) | 15 zonas sin repetir. Los ids y los `kind` coinciden con las tablas de la especificación. El círculo entero queda dentro de 720 × 900. `r ≥ 48`. Entre los bordes de cada par de zonas, ≥ 16 |
+| C41 | ídem | Node: `POINTS` de cada señal = tabla de la especificación; `scoreOf` de las 8 señales = 8 y 185; `scoreOf` de los distractores (los 7 juntos y cada uno solo) = 0 y 0. Navegador: en `calm`, `normal` y `fast`, las 8 señales con mouse dan `{ completed: true, hits: 8, total: 8, score: 185 }` |
+| C42 | ídem | Ver la lista de abajo |
+| C28 (vacío) | `contract/c26-c32-contract.spec.ts` (Node) | `meta.emptyResult.when === "hits"` |
+
+C42 en detalle:
+
+- **Medios:** teclado con Enter y con Espacio, mouse y toque, sobre dos puntos de agua vacía: uno lejos de toda zona y otro justo afuera de una.
+- **Qué se exige:** después de cada input, 500 ms sin eventos de callback y con las mismas marcas.
+- **`[control]`:** el mismo medio sí marca un distractor.
+- **Agregados acordados:**
+  - otra vez sobre el elemento ya marcado: nada;
+  - un deslizamiento vertical que empieza sobre una zona, a 390 px, scrollea la página y no marca.
+
+**Coordenadas provisorias:** C40, C24, C25, C41 en el navegador, C42 y C20(b) se vuelven a correr como mini-veredicto cuando se carguen las coordenadas reales.
+
+**Regresión:** mi suite completa sobre todos los proyectos (T2, `_dummy`, `_dummy-run`, clean-channels con su arte real, `_dummy-scene` y `water-signs`), más `check-spike.mjs` y `check-assets.mjs` de clean-channels y de water-signs.
+
+**Validación (13/10/2026):** contra un doble de water-signs (fuera del repo):
+
+- La versión correcta pasa los 73 tests que aplican.
+- Los 15 defectos inyectados se detectan todos, cada uno con su test:
+  - zonas superpuestas, fuera de los límites, con `r < 48` o con un id distinto;
+  - puntos mal repartidos con la misma suma;
+  - `scoreOf` que cuenta distractores;
+  - `when: "total"`;
+  - puntaje mal en Atento;
+  - agua vacía que anuncia o que gasta una marca;
+  - radio de detección más grande;
+  - elemento ya marcado que vuelve a anunciar;
+  - marcar al apoyar en vez de al soltar;
+  - Enter muerto;
+  - dificultad ignorada.
