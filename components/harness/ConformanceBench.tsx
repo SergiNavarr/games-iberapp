@@ -6,7 +6,7 @@ import { BENCH_IDS, benchStage } from "@/components/harness/bench-games";
 import type { GameHandle, GameModule, GameTheme } from "@/lib/games/contract";
 import { useGameProgress } from "@/lib/storage/game-progress";
 
-// HARNESS (T4, E1): conformance bench for the judge's suite (tests/conformance/contract/). Fixed interface: the route
+// HARNESS (T4, E1, E2): conformance bench for the judge's suite (tests/conformance/contract/). Fixed interface: the route
 // /conformance/[gameId] and its query (seed, testHooks, reducedMotion, difficulty, timeScale), the data-testid
 // attributes, the button names (GameStage) and window.__conformance. Do not change them without agreeing with the
 // coordinator. The raw path has no review: it logs run-end and keeps its handle until raw.destroy().
@@ -125,6 +125,7 @@ export function ConformanceBench({ initialGameId, seed, testHooks, reducedMotion
           onReady: () => record({ event: "ready", payload: null }),
           onProgress: (p) => record({ event: "progress", payload: p }),
           onCollect: (p) => record({ event: "collect", payload: p }),
+          onCounter: (c) => record({ event: "counter", payload: c }),
           announce: (text) => record({ event: "announce", payload: text }),
           onComplete: (result) => record({ event: "complete", payload: result.total <= total ? result : { ...result, totalOverMax: total } } as GameStageEvent),
           onRunEnd: (summary) => record({ event: "run-end", payload: summary }),

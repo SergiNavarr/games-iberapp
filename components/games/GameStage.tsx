@@ -31,6 +31,10 @@ import type { GameId } from "@/types/portal";
 // Run games (entry.review): the canvas plays the run and reports onCollect / onRunEnd. On onRunEnd the wrapper
 // destroys the canvas (no WebGL context during review and result) and mounts the game's review component, which
 // reports each answer and the final result; the wrapper announces, scores, validates and saves.
+//
+// E2, all opt-in through meta (games that do not declare them behave as in E1): hitsFrom "game" (the canvas reports
+// the hits and the review answers are neutral), textPanel (the last announcement in a visible panel), counterLabel (a
+// secondary counter fed by onCounter) and emptyResult.when (which result gets the empty screen).
 
 export type GameStageState = "coming-soon" | "intro" | "loading" | "playing" | "review" | "result" | "error";
 
@@ -39,6 +43,7 @@ export type GameStageEvent =
   | { event: "ready"; payload: null }
   | { event: "progress"; payload: { hits: number; total: number } }
   | { event: "collect"; payload: { collected: number; inChannel: number } }
+  | { event: "counter"; payload: { value: number; max: number } }
   | { event: "announce"; payload: string }
   | { event: "run-end"; payload: unknown }
   | { event: "answer"; payload: { hit: boolean; hits: number; total: number } }
@@ -138,16 +143,23 @@ function initialDifficulty(entry: ReadyEntry | null, preferred: string | undefin
   return entry?.meta.defaultDifficulty ?? options[0].id;
 }
 
+function newPlay(token: number, difficulty: string | undefined, total: number) {
+  return { token, difficulty, collected: 0, answered: 0, hits: 0, done: false, gameHits: 0, gameTotal: total };
+}
+
 function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewProps) {
   const ready = entry.status === "ready" ? entry : null;
   const meta = ready?.meta;
   const isRunGame = !!ready?.review;
+  // E1: the review's right answers are the hits. E2 (hitsFrom "game"): the canvas reports them, the review only answers.
+  const scoreFromReview = isRunGame && (meta?.hitsFrom ?? "review") === "review";
   const [state, setState] = useState<GameStageState>(ready ? "intro" : "coming-soon");
   const [run, setRun] = useState(0);
   const [difficulty, setDifficulty] = useState(() => initialDifficulty(ready, devOptions?.difficulty));
   const [hits, setHits] = useState(0);
   const [denominator, setDenominator] = useState(() => (meta ? maxTotal(meta, initialDifficulty(ready, devOptions?.difficulty)) : 0));
   const [collect, setCollect] = useState({ collected: 0, inChannel: 0 });
+  const [counter, setCounter] = useState<{ value: number; max: number } | null>(null);
   const [review, setReview] = useState<ReviewView | null>(null);
   const [result, setResult] = useState<GameResult | null>(null);
   const [live, setLive] = useState({ text: "", n: 0 });
@@ -160,8 +172,9 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
   const reviewModuleRef = useRef<Promise<ReviewModule> | null>(null);
   const pauseRef = useRef({ offscreen: false, hidden: false, result: false });
   const autoPaused = useRef(false);
-  // The play in progress: difficulty played, collected count (the review's denominator) and the review's tally.
-  const playRef = useRef({ token: 0, difficulty: undefined as string | undefined, collected: 0, answered: 0, hits: 0, done: false });
+  // The play in progress: difficulty played, collected count (the review's denominator), the review's tally, and the
+  // hits the canvas reported (hitsFrom "game").
+  const playRef = useRef(newPlay(0, undefined, 0));
   const { theme } = useTheme();
   const systemReducedMotion = usePrefersReducedMotion();
 
@@ -258,8 +271,11 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       const promise = loadReview();
       if (!promise) return fail(new Error("El juego terminó un recorrido pero no tiene revisión"));
       Object.assign(play, { answered: 0, hits: 0, done: false });
-      setHits(0);
-      setDenominator(play.collected);
+      // hitsFrom "game": the marker keeps what the canvas reported.
+      if (scoreFromReview) {
+        setHits(0);
+        setDenominator(play.collected);
+      }
       go("review");
       promise.then(
         ({ Review }) => {
@@ -270,7 +286,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
         },
       );
     },
-    [loadReview, go, fail],
+    [loadReview, go, fail, scoreFromReview],
   );
 
   const onAnswer = useCallback(
@@ -278,6 +294,12 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       const play = playRef.current;
       if (play.done) return;
       play.answered += 1;
+      if (!scoreFromReview) {
+        // Neutral answer (hitsFrom "game"): logged and announced; hits stay what the canvas reported.
+        emit({ event: "answer", payload: { hit, hits: play.gameHits, total: play.gameTotal } });
+        say(announcement);
+        return;
+      }
       if (hit) play.hits += 1;
       emit({ event: "answer", payload: { hit, hits: play.hits, total: play.collected } });
       if (hit) {
@@ -286,7 +308,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       }
       say(announcement);
     },
-    [emit, say],
+    [emit, say, scoreFromReview],
   );
 
   const onDone = useCallback(
@@ -355,6 +377,8 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
           },
           onProgress: (progress) => {
             if (disposed) return;
+            play.gameHits = progress.hits;
+            play.gameTotal = progress.total;
             setHits(progress.hits);
             setDenominator(progress.total);
             emit({ event: "progress", payload: progress });
@@ -364,6 +388,11 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
             play.collected = progress.collected;
             setCollect(progress);
             emit({ event: "collect", payload: progress });
+          },
+          onCounter: (next) => {
+            if (disposed) return;
+            setCounter(next);
+            emit({ event: "counter", payload: next });
           },
           announce: (text) => {
             if (!disposed) say(text);
@@ -441,11 +470,12 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
   const start = () => {
     if (!meta) return;
     const max = maxTotal(meta, difficulty);
-    playRef.current = { token: playRef.current.token + 1, difficulty, collected: 0, answered: 0, hits: 0, done: false };
+    playRef.current = newPlay(playRef.current.token + 1, difficulty, max);
     loadReview(); // ready by the end of the run
     setHits(0);
     setDenominator(max);
     setCollect({ collected: 0, inChannel: max });
+    setCounter(null);
     setReview(null);
     setResult(null);
     setLive((prev) => ({ text: "", n: prev.n }));
@@ -455,7 +485,12 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
   };
 
   const busy = state === "loading";
-  const showCollect = isRunGame && (state === "loading" || state === "playing");
+  const inPlay = state === "loading" || state === "playing";
+  const showCollect = scoreFromReview && inPlay;
+  const showCounter = !!meta?.counterLabel && !!counter && inPlay;
+  const showPanel = !!meta?.textPanel && (inPlay || state === "review");
+  // The empty screen replaces the usual title and score (G1: no result-score) when meta's condition holds.
+  const empty = !!result && (meta?.emptyResult?.when === "hits" ? result.hits === 0 : result.total === 0);
 
   return (
     <section
@@ -555,9 +590,9 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
             {state === "result" && result && (
               <Panel>
                 <h4 ref={resultTitleRef} data-testid="result-title" tabIndex={-1} className="title-display m-0 text-[clamp(26px,3.4vw,40px)] leading-none text-head">
-                  {result.total === 0 ? (meta.emptyResult?.title ?? EMPTY_TITLE) : result.completed ? "¡Desafío completo!" : "Fin de la partida"}
+                  {empty ? (meta.emptyResult?.title ?? EMPTY_TITLE) : result.completed ? "¡Desafío completo!" : "Fin de la partida"}
                 </h4>
-                {result.total === 0 ? (
+                {empty ? (
                   <p data-testid="result-empty" className="m-0 max-w-[56ch] text-[17px] leading-snug">
                     {meta.emptyResult?.text ?? EMPTY_TEXT}
                   </p>
@@ -566,8 +601,8 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
                     {result.hits} / {result.total} {meta.scoreLabel}
                   </p>
                 )}
-                {/* With total 0 the empty title stands in for the score (user decision, G1): no score line. */}
-                {result.total > 0 && (
+                {/* The empty title stands in for the score (user decision, G1): no score line. */}
+                {!empty && (
                   <p data-testid="result-score" className="title-display m-0 text-[clamp(22px,2.6vw,30px)] leading-none text-head">
                     {result.score} {meta.pointsLabel ?? "puntos"}
                   </p>
@@ -617,11 +652,27 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
                 {meta.scoreLabel}
               </p>
             )}
-            <p data-testid="live" role="status" aria-live="polite" className="m-0 min-h-[1.4em] text-[15px] text-mute">
+            {showCounter && (
+              <p className="m-0 text-[15px] text-mute">
+                <span data-testid="counter" className="font-semibold text-fg">
+                  {counter.value} / {counter.max}
+                </span>{" "}
+                {meta.counterLabel}
+              </p>
+            )}
+            {/* With the visible panel this region only speaks (hidden from view): the text is not shown twice. */}
+            <p data-testid="live" role="status" aria-live="polite" className={meta.textPanel ? "sr-only" : "m-0 min-h-[1.4em] text-[15px] text-mute"}>
               {live.text}
               {live.n % 2 ? " " : ""}
             </p>
           </div>
+
+          {showPanel && (
+            // The visual twin of the live region, which does the speaking: under the stage, never over it.
+            <div data-testid="text-panel" aria-hidden="true" className="min-h-[5.5rem] rounded-[12px] border border-rule px-4 py-3 text-[17px] leading-snug text-fg">
+              {live.text}
+            </div>
+          )}
         </>
       )}
     </section>

@@ -2,7 +2,7 @@ import * as Phaser from "phaser";
 import { gameResultSchema, type DebugTarget, type GameConfig, type GameHandle, type GameTokens } from "@/lib/games/contract";
 import { describeTextures, type ManifestEntry } from "./assets";
 import { createBaseConfig } from "./config";
-import { PALETTE_KEY, setGameContext, type GameContext, type MotionStats, type SceneRun, type SceneTarget } from "./context";
+import { PALETTE_KEY, setGameContext, type GameContext, type MotionStats, type SceneRun, type SceneState, type SceneTarget } from "./context";
 import { DESIGN_SIZES, layoutFor } from "./layout";
 import { toPalette, type Palette } from "./palette";
 import { createRandom } from "./random";
@@ -50,10 +50,12 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
   let failed = false;
   let lastHits = 0;
   let lastCollected: string | null = null;
+  let lastCounter: string | null = null;
   let paused = false;
   let palette: Palette = toPalette(config.tokens);
   let targets: (() => SceneTarget[]) | null = null;
   let run: (() => SceneRun) | null = null;
+  let sceneState: (() => SceneState) | null = null;
   let simClock: (() => number) | null = null;
   const textureSources = new Map<string, "file" | "scaled" | "placeholder">();
   const motionStats: MotionStats = { created: 0, effects: [], flashes: [], shakes: [], staticFeedback: [], collisions: [] };
@@ -93,6 +95,12 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
       lastCollected = key;
       config.onCollect({ collected, inChannel });
     },
+    counter(value, max) {
+      const key = `${value}/${max}`;
+      if (destroyed || completed || runEnded || failed || key === lastCounter) return;
+      lastCounter = key;
+      config.onCounter({ value, max });
+    },
     announce(text) {
       if (!destroyed) config.announce(text);
     },
@@ -122,6 +130,9 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     },
     setRun(provider) {
       run = provider;
+    },
+    setScene(provider) {
+      sceneState = provider;
     },
     textureSources,
     motionStats,
@@ -188,12 +199,21 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     if (paused && !destroyed) game.loop.sleep();
   });
 
-  const toCss = (points: SceneTarget[]): DebugTarget[] => {
+  /** Design px → CSS px relative to the container: offset and scale of the canvas inside it. */
+  const cssFrame = () => {
     const box = container.getBoundingClientRect();
     const rect = canvas.getBoundingClientRect();
-    const sx = rect.width / game.scale.gameSize.width;
-    const sy = rect.height / game.scale.gameSize.height;
-    return points.map((p) => ({ id: p.id, x: rect.left - box.left + p.x * sx, y: rect.top - box.top + p.y * sy, ...(p.kind ? { kind: p.kind } : {}) }));
+    return {
+      left: rect.left - box.left,
+      top: rect.top - box.top,
+      sx: rect.width / game.scale.gameSize.width,
+      sy: rect.height / game.scale.gameSize.height,
+    };
+  };
+
+  const toCss = (points: SceneTarget[]): DebugTarget[] => {
+    const f = cssFrame();
+    return points.map((p) => ({ id: p.id, x: f.left + p.x * f.sx, y: f.top + p.y * f.sy, ...(p.kind ? { kind: p.kind } : {}) }));
   };
 
   const handle: GameHandle = {
@@ -254,6 +274,15 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
       const { width, height } = game.scale.gameSize;
       // elapsedMs in the run's simulation time: the same base as items[].arriveAt and debugMotion (not the boot clock).
       return { difficulty: config.difficulty ?? null, layout: layoutFor(width, height), timeScale, elapsedMs: context.simNow(), ...run() };
+    };
+    handle.debugScene = () => {
+      if (destroyed || !sceneState) return null;
+      const { fit, size, ...state } = sceneState();
+      const { width, height } = game.scale.gameSize;
+      const f = cssFrame();
+      // FIT keeps the canvas proportion, so sx = sy (up to rounding): one scale for the view.
+      const view = { left: f.left + fit.x * f.sx, top: f.top + fit.y * f.sy, scale: fit.scale * f.sx, width: size.width, height: size.height };
+      return { difficulty: config.difficulty ?? null, layout: layoutFor(width, height), view, ...state };
     };
     handle.debugMotion = () => ({
       active: motionStats.effects.filter((isActive) => isActive()).length,

@@ -95,6 +95,26 @@ export function motion(scene: Phaser.Scene) {
       return tween;
     },
 
+    /**
+     * A short entrance (E2): the target grows from 60 % and fades in to its current scale and alpha. Reduced: it is
+     * shown at once, and nothing is created or counted.
+     */
+    appear(target: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.Components.Alpha, duration = 150) {
+      if (reduced) return null;
+      const { scaleX, scaleY, alpha } = target;
+      target.setScale(scaleX * 0.6, scaleY * 0.6).setAlpha(0); // no frame at full size before the tween starts
+      const tween = scene.tweens.add({
+        targets: target,
+        scaleX: { from: scaleX * 0.6, to: scaleX },
+        scaleY: { from: scaleY * 0.6, to: scaleY },
+        alpha: { from: 0, to: alpha },
+        duration,
+        ease: "Cubic.easeOut",
+      });
+      track(() => tween.isPlaying());
+      return tween;
+    },
+
     /** Endless back-and-forth decoration (yoyo). Reduced: nothing moves. */
     ambient(targets: Targets, to: Record<string, number>, duration: number) {
       if (reduced) return null;

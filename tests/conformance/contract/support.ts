@@ -1,5 +1,5 @@
-// JUDGE (tests/conformance): shared helpers for the W suite (checklist §2.6 + E1) against the `_dummy` variants.
-// Talks to the page only through the fixed interface of the tickets T3+T4 and E1: /conformance/[gameId],
+// JUDGE (tests/conformance): shared helpers for the W suite (checklist §2.6 + E1 + E2) against the `_dummy` variants.
+// Talks to the page only through the fixed interface of the tickets T3+T4, E1 and E2: /conformance/[gameId],
 // window.__conformance and the agreed data-testid list. Coder modules (contract.ts, meta.ts, game-progress.ts) are
 // loaded by file path at run time, never imported statically, so a renamed export can never break the coder's `tsc`
 // or `next build` (C01). JUDGE_MODULES_ROOT overrides where they are read from (only to validate the suite against a
@@ -8,10 +8,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { test as base, type Page } from "@playwright/test";
-import { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, type Variant } from "./variants";
+import { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, type Variant } from "./variants";
 
 export { expect } from "@playwright/test";
-export { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, type Variant };
+export { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, type Variant };
 
 /** `variant` is a project option (playwright.conformance.config.ts): each W spec runs once per `_dummy` variant. */
 // Worker-scoped so beforeAll hooks can read it too. `{}`: no test-scoped fixtures (Playwright's own idiom).
@@ -41,6 +41,8 @@ export const REVIEW_ITEM = '[data-testid="review-item"]';
 export const REVIEW_FEEDBACK = '[data-testid="review-feedback"]';
 export const REVIEW_NEXT = '[data-testid="review-next"]';
 export const REVIEW_OPTION_PREFIX = "review-option-";
+export const TEXT_PANEL = '[data-testid="text-panel"]';
+export const COUNTER = '[data-testid="counter"]';
 
 export type WrapperState = "coming-soon" | "intro" | "loading" | "playing" | "review" | "result" | "error";
 export type LogEntry = { t: number; event: string; payload?: unknown; source?: string };
@@ -68,6 +70,20 @@ export type DebugRun = {
   spawns: { id: string; kind: string; x: number; t: number }[];
 };
 export type DebugMotion = { active: number; created: number; flashes: number[]; shakes: number[]; staticFeedback: number[]; collisions: number[] };
+/** E2 scene hook: scene px; cssX = view.left + x * view.scale (relative to the mount container, like debugTargets()). */
+export type SceneZone = { id: string; kind: "signal" | "decoy"; x: number; y: number; r: number; marked: boolean };
+export type DebugScene = {
+  difficulty: string | null;
+  layout: "landscape" | "portrait";
+  view: { left: number; top: number; scale: number; width: number; height: number };
+  marks: number;
+  marksLeft: number;
+  hits: number;
+  score: number;
+  crosshair: { x: number; y: number; step: number };
+  zones: SceneZone[];
+  ended: boolean;
+};
 export type Handle = {
   destroy(): void;
   pause(): void;
@@ -77,6 +93,7 @@ export type Handle = {
   debugTextures?(): DebugTexture[];
   debugRun?(): DebugRun | null;
   debugMotion?(): DebugMotion;
+  debugScene?(): DebugScene | null;
 };
 export type RawMountOpts = { seed?: number; reducedMotion?: boolean; theme?: "dark" | "light"; testHooks?: boolean; difficulty?: string; timeScale?: number };
 export type ConformanceApi = {
@@ -98,8 +115,8 @@ export type ConformanceApi = {
 // Used only inside page functions: `(window as unknown as ConformanceWindow).__conformance`.
 export type ConformanceWindow = { __conformance: ConformanceApi };
 
-/** Game callbacks as they appear in the bench log (C06: none may arrive after destroy()). */
-export const CALLBACK_EVENTS = ["ready", "progress", "announce", "complete", "error", "collect", "run-end", "answer"];
+/** Game callbacks as they appear in the bench log (C06: none may arrive after destroy()). E2 adds `counter`. */
+export const CALLBACK_EVENTS = ["ready", "progress", "announce", "complete", "error", "collect", "run-end", "answer", "counter"];
 
 // ---------- Navigation ----------
 
@@ -242,6 +259,15 @@ export function debugMotion(page: Page, which: "stage" | "raw" = "stage"): Promi
     const h = w === "raw" ? c.raw.handle() : c.handle();
     const m = h?.debugMotion?.() ?? null;
     return m ? (JSON.parse(JSON.stringify(m)) as DebugMotion) : null;
+  }, which);
+}
+
+export function debugScene(page: Page, which: "stage" | "raw" = "stage"): Promise<DebugScene | null> {
+  return page.evaluate((w) => {
+    const c = (window as unknown as ConformanceWindow).__conformance;
+    const h = w === "raw" ? c.raw.handle() : c.handle();
+    const s = h?.debugScene?.() ?? null;
+    return s ? (JSON.parse(JSON.stringify(s)) as DebugScene) : null;
   }, which);
 }
 
@@ -454,14 +480,150 @@ export async function answerReview(page: Page, answers: Record<string, string>, 
   throw new Error("la revisión no llegó a result");
 }
 
-export type FinishOptions = { mode?: InputMode; steer?: "none" | "all" | "left"; choose?: (i: number) => boolean };
+// ---------- Playing `_dummy-scene` (E2): crosshair with arrows + Enter/Space, or the pointer on debugTargets() ----------
+
+/** Centers the stage in the viewport (pointer coordinates must land on it; an off-screen stage is auto-paused). */
+export async function centerStage(page: Page, stageSelector = STAGE) {
+  await page.evaluate((sel) => {
+    const r = document.querySelector(sel)?.getBoundingClientRect();
+    if (r) window.scrollTo({ top: window.scrollY + r.top + r.height / 2 - window.innerHeight / 2, behavior: "instant" });
+  }, stageSelector);
+}
+
+/**
+ * Moves the crosshair with single arrow presses (each one a press of a few ms: one step) until it is within half a
+ * step of (x, y) in scene px, reading debugScene().crosshair after every press. Focus on `stageSelector`.
+ */
+export async function moveCrosshair(page: Page, x: number, y: number, stageSelector = STAGE, which: "stage" | "raw" = "stage") {
+  await page.locator(stageSelector).focus();
+  for (let i = 0; i < 300; i++) {
+    const s = await debugScene(page, which);
+    if (!s) throw new Error("debugScene() devolvió null mientras se movía la mira");
+    const half = s.crosshair.step / 2;
+    const dx = x - s.crosshair.x;
+    const dy = y - s.crosshair.y;
+    if (Math.abs(dx) <= half && Math.abs(dy) <= half) return s.crosshair;
+    const horizontal = Math.abs(dx) > half && (Math.abs(dx) >= Math.abs(dy) || Math.abs(dy) <= half);
+    const key = horizontal ? (dx < 0 ? "ArrowLeft" : "ArrowRight") : dy < 0 ? "ArrowUp" : "ArrowDown";
+    await page.keyboard.press(key);
+    const moved = await page
+      .waitForFunction(
+        ([w, cx, cy]) => {
+          const c = (window as unknown as ConformanceWindow).__conformance;
+          const scene = (w === "raw" ? c.raw.handle() : c.handle())?.debugScene?.();
+          return !scene || scene.crosshair.x !== cx || scene.crosshair.y !== cy;
+        },
+        [which, s.crosshair.x, s.crosshair.y] as const,
+        { timeout: 2_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (!moved) throw new Error(`la mira no se movió con ${key} desde (${s.crosshair.x}, ${s.crosshair.y})`);
+  }
+  throw new Error(`la mira no llegó a (${x}, ${y}) en 300 pulsaciones`);
+}
+
+/** Marks zone `id` through `mode`: keyboard = crosshair + Enter; mouse/touch = click/tap on its debugTargets() center. */
+export async function markZone(page: Page, id: string, mode: InputMode, stageSelector = STAGE, which: "stage" | "raw" = "stage") {
+  if (mode === "keyboard") {
+    const s = await debugScene(page, which);
+    const zone = s?.zones.find((z) => z.id === id);
+    if (!zone) throw new Error(`zona ${id} no está en debugScene().zones`);
+    await moveCrosshair(page, zone.x, zone.y, stageSelector, which);
+    await page.keyboard.press("Enter");
+  } else {
+    const [targets, box] = await Promise.all([
+      page.evaluate((w) => {
+        const c = (window as unknown as ConformanceWindow).__conformance;
+        return ((w === "raw" ? c.raw.handle() : c.handle())?.debugTargets?.() ?? []).map((t) => ({ id: t.id, x: t.x, y: t.y }));
+      }, which),
+      page.locator(stageSelector).boundingBox(),
+    ]);
+    const t = targets.find((x) => x.id === id);
+    if (!t || !box) throw new Error(`zona ${id} no está en debugTargets() (o no hay escenario)`);
+    if (mode === "mouse") await page.mouse.click(box.x + t.x, box.y + t.y);
+    else await page.touchscreen.tap(box.x + t.x, box.y + t.y);
+  }
+  // Marked, or the phase ended (the last mark ends it in the same frame and the canvas is destroyed).
+  const marked = await page
+    .waitForFunction(
+      ([w, zoneId]) => {
+        const c = (window as unknown as ConformanceWindow).__conformance;
+        const scene = (w === "raw" ? c.raw.handle() : c.handle())?.debugScene?.();
+        return !scene || scene.ended || !!scene.zones.find((z) => z.id === zoneId)?.marked;
+      },
+      [which, id] as const,
+      { timeout: 5_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  if (!marked) throw new Error(`la zona ${id} no quedó marcada con ${mode}`);
+}
+
+export type MarkSegment = { id: string; kind: "signal" | "decoy"; logFrom: number; logTo: number };
+
+/**
+ * Marks the zones `ids` in order through `mode` (stage centered first) and returns the log segment [logFrom, logTo) of
+ * each mark (C26). `afterMark` runs after each mark (C28 checks the DOM there); `gapMs` waits after it.
+ */
+export async function playScene(
+  page: Page,
+  variant: Variant,
+  ids: string[],
+  mode: InputMode = "keyboard",
+  opts: { stageSelector?: string; which?: "stage" | "raw"; gapMs?: number; afterMark?: (segment: MarkSegment) => Promise<void> } = {},
+) {
+  const stageSelector = opts.stageSelector ?? STAGE;
+  const kinds = new Map(loadSceneData(variant).ZONES.map((z) => [z.id, z.kind]));
+  await centerStage(page, stageSelector);
+  await page.waitForTimeout(250);
+  const segments: MarkSegment[] = [];
+  for (const id of ids) {
+    const kind = kinds.get(id);
+    if (!kind) throw new Error(`zona ${id} no está en data.ts ZONES`);
+    const logFrom = await logLength(page);
+    await markZone(page, id, mode, stageSelector, opts.which ?? "stage");
+    await page.waitForTimeout(150);
+    const segment = { id, kind, logFrom, logTo: await logLength(page) };
+    segments.push(segment);
+    if (opts.afterMark) await opts.afterMark(segment);
+    if (opts.gapMs) await page.waitForTimeout(opts.gapMs);
+  }
+  return segments;
+}
+
+/** Answers of the scene's review for answerReview(): its single item and the correct option (data.ts QUESTION). */
+export function sceneAnswers(variant: Variant): Record<string, string> {
+  const { QUESTION } = loadSceneData(variant);
+  return { [QUESTION.id]: QUESTION.answer };
+}
+
+/** Ids of the scene's zones of one kind, in data.ts order. */
+export function sceneZoneIds(variant: Variant, kind: "signal" | "decoy"): string[] {
+  return loadSceneData(variant)
+    .ZONES.filter((z) => z.kind === kind)
+    .map((z) => z.id);
+}
+
+export type FinishOptions = { mode?: InputMode; steer?: "none" | "all" | "left"; choose?: (i: number) => boolean; marks?: string[] };
 
 /**
  * Plays the current game to `result`, starting while it is in `playing`. Single-phase: completes with the keyboard.
  * Run game: steering policy (default none), wait for `run-end`, then answers the review (default: all correct).
- * Returns the log.
+ * Scene game: marks `marks` (default: every signal), waits for `run-end`, then answers the review. Returns the log.
  */
 export async function finishGame(page: Page, variant: Variant, opts: FinishOptions = {}): Promise<LogEntry[]> {
+  if (variant.scene) {
+    const mode = opts.mode ?? "keyboard";
+    const runEnds = (await readLog(page)).filter((e) => e.event === "run-end").length;
+    await playScene(page, variant, opts.marks ?? sceneZoneIds(variant, "signal"), mode);
+    await page.waitForFunction((n) => (window as unknown as ConformanceWindow).__conformance.log.filter((e) => e.event === "run-end").length > n, runEnds, {
+      timeout: 30_000,
+    });
+    await answerReview(page, sceneAnswers(variant), mode, opts.choose);
+    await waitForState(page, "result", 10_000);
+    return readLog(page);
+  }
   if (!variant.run) return completeWithKeyboard(page);
   const mode = opts.mode ?? "keyboard";
   const answers = await captureAnswers(page);
@@ -508,7 +670,12 @@ export type GameMeta = {
   essentialMotion: boolean;
   difficulties?: { id: string; label: string; total: number }[];
   defaultDifficulty?: string;
-  emptyResult?: { title: string; text: string };
+  emptyResult?: { title: string; text: string; when?: "total" | "hits" };
+  // E2 (optional, additive).
+  hitsFrom?: "review" | "game";
+  textPanel?: boolean;
+  counterLabel?: string;
+  stillWithoutInput?: boolean;
 };
 export type DummyMeta = GameMeta;
 export type ProgressEntry = { completed: boolean; hits: number; total: number; score: number; savedAt: string };
@@ -541,6 +708,23 @@ export function loadBuildRun(variant: Variant): BuildRun {
   const { buildRun } = importModule<{ buildRun?: BuildRun }>(`${variant.dir}/data.ts`);
   if (typeof buildRun !== "function") throw new Error(`${variant.dir}/data.ts no exporta buildRun`);
   return buildRun;
+}
+
+export type SceneData = {
+  ZONES: { id: string; kind: "signal" | "decoy"; x: number; y: number; r: number; points: number }[];
+  MARKS: Record<string, number>;
+  SCENE: { width: number; height: number };
+  CROSSHAIR: { startX: number; startY: number; step: number };
+  QUESTION: { id: string; answer: string };
+  scoreOf(markedIds: string[]): { hits: number; score: number };
+};
+
+/** lib/games/<id>/data.ts of a scene game (E2): pure, importable in Node without Phaser or DOM. */
+export function loadSceneData(variant: Variant): SceneData {
+  const data = importModule<Partial<SceneData>>(`${variant.dir}/data.ts`);
+  for (const name of ["ZONES", "MARKS", "SCENE", "CROSSHAIR", "QUESTION", "scoreOf"] as const)
+    if (data[name] === undefined) throw new Error(`${variant.dir}/data.ts no exporta ${name}`);
+  return data as SceneData;
 }
 
 /** First seed in [1, max] whose buildRun satisfies `ok`, or null. */

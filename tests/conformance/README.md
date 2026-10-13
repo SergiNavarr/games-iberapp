@@ -74,3 +74,64 @@ La suite corre también con la variante `clean-channels` (proyectos `contract-cc
 - **C28 y C39(c), `total` 0:** `result-score` no se muestra (decisión del usuario en G1, vale para todos los juegos), y `result-title` y `result-empty` muestran `meta.emptyResult`.
 - **C34:** a ×1 mide `calm` y `fast` (75 y 60 s), compara el cronograma de ×10 con el de ×1 en `calm`, y corre la dificultad más corta sin `testHooks`. Timeout de 8 min.
 - **Validación (12/10/2026):** contra un doble de clean-channels con un `buildRun` propio compartido entre Node y navegador, la versión correcta pasa. Por esa validación corregí dos cosas en mis tests: el plan de C36 (el bot ahora estaciona el kayak en vez de perseguir dos obstáculos a menos de 500 ms) y el lector de cabeceras VP8L de `check-assets.mjs`.
+
+## E2 · enmienda aditiva del wrapper (`_dummy-scene`)
+
+E2 se juzga con dos partes. Las dos se corren en cada corrida del veredicto, y además C01:
+
+1. **C43 (aditividad) y regresión:** la suite de `166332f` congelada, sin tocar un byte, corrida contra el árbol de E2.
+2. **Suite E2:** la variante `_dummy-scene`, más las búsquedas estáticas y las pruebas de Node.
+
+| Parte | Comando |
+| --- | --- |
+| (1) C43 | `node scripts/check-c43.mjs` |
+| (2) E2 | `npx playwright test -c playwright.conformance.config.ts --project contract-scene-dev --project contract-scene-start` |
+
+Qué hace `check-c43.mjs`:
+
+- extrae con `git archive` `tests/conformance`, la config y `scripts/` de `166332f` a una carpeta temporal fuera del repo;
+- corre `check-spike.mjs` y `check-assets.mjs clean-channels` congelados;
+- corre todos los proyectos de la config congelada, con el repo como directorio de trabajo.
+
+En la suite E2:
+
+- La variante nueva vive en `contract/variants.ts` (`scene: true`, `stillWithoutInput: true`, C19 a 1280 y 390 px).
+- Las pruebas que cubren todos los juegos de una vez corren desde su proyecto (`ONCE_VARIANT`): búsquedas estáticas sobre las cuatro carpetas y `shared/`, C08 alternando los cuatro juegos, C30(c) y C31.
+- Los helpers de la escena están en `contract/support.ts`: `debugScene`, `moveCrosshair`, `markZone`, `playScene` y `loadSceneData`. `finishGame` marca todas las señales y contesta la revisión.
+
+| ID | Dónde | Cómo se verifica (lecturas acordadas con el coordinador) |
+| --- | --- | --- |
+| C08b, C08c | `contract/c08b-pause.spec.ts` | Con `meta.stillWithoutInput`, el `[control]` es una flecha que cambia el canvas. En la ventana quieta: otra flecha, ≤ 2 rAF, capturas idénticas y `debugMotion().created` sin cambios. Al reanudar: > 30 rAF y una flecha **nueva** cambia el canvas (no se exige procesar la que quedó en cola). Lo mismo en C08c (a) y (b) |
+| C20(b) | `contract/c19-c20-theme-motion.spec.ts` | El `[control]` es marcar un señuelo. El muestreo de `debugMotion()` corre dentro de la página cada ~10 ms y arranca antes de Enter. La ventana es 1 s desde el evento `counter` de la marca. Sin `reducedMotion`: `created` + 1 y alguna muestra activa. Con `reducedMotion`: todas las muestras en 0 |
+| C24, C25, C33, C35 | `contract/c24-c35-scene.spec.ts` | Teclado: la mira con flechas sueltas, leyendo `debugScene().crosshair`, y Enter. Mouse y toque: sobre los `debugTargets()` de las señales. En los dos, la revisión con el mismo medio y `result` = `scoreOf(señales)`. C33: 0 canvas en `review` y `result`. C35: `debugScene().difficulty` y `marksLeft` = `MARKS[d]` |
+| C26 | `contract/c26-c32-contract.spec.ts` | Partida parcial que gasta las marcas de `calm` alternando señuelos y señales. El oráculo es el `kind` de `data.ts`. Señal: 1 `progress` (+1) y ≥ 1 `announce`. Señuelo: 0 y ≥ 1. Revisión: 0 `progress` y ≥ 1 `announce`, en dos partidas (respuesta acertada y errada). `complete` 1 vez, igual a `{ completed: true, total, ...scoreOf(marcadas) }` en las dos |
+| C28 | ídem | Ver la lista de abajo |
+| genérico | `contract/c00-static.spec.ts` | `rg -i "water-signs"` en `components/games/GameStage.tsx` y `lib/games/shared/` → 0 |
+
+C28 en la suite E2:
+
+- **Marcador:** `hits / total` después de cada acierto del canvas, y se conserva en la revisión, también después de contestar bien.
+- **Panel:** `text-panel` visible, con el texto del último `announce` (con trim), en `playing` y en `review`.
+- **Contador:** `counter` contiene `valor / máximo`, con `counterLabel` en su línea.
+- **Resultado vacío:** con `emptyResult.when: "hits"` (`fast` + 3 señuelos), título y texto de `meta`, sin `result-score`. Sin la condición, `result-score` con el score y sin `result-empty`.
+- **El panel no tapa el escenario:** su rectángulo no se cruza con el de `stage`, a 1280 y a 390 px.
+
+**Validación (12–13/10/2026):** contra un doble de `_dummy-scene` (fuera del repo):
+
+- La versión correcta pasa los 79 tests que aplican.
+- Los 21 defectos inyectados se detectan todos, cada uno con su test:
+  - teclas que redibujan en pausa;
+  - efectos creados en pausa;
+  - flecha muerta al reanudar;
+  - `reducedMotion` ignorado y transición ausente;
+  - `progress` en señuelos;
+  - señal sin `announce` y revisión sin `announce`;
+  - `hits` derivados de la revisión;
+  - marcador reiniciado en la revisión;
+  - panel con el primer texto y panel congelado en la revisión;
+  - contador congelado e invertido;
+  - condición de vacío ignorada y `result-score` con la condición cumplida;
+  - panel encima del escenario;
+  - Enter muerto y toque muerto;
+  - dificultad ignorada;
+  - canvas que sobrevive a la revisión.

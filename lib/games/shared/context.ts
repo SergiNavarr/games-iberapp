@@ -1,7 +1,8 @@
 import type * as Phaser from "phaser";
-import type { DebugRun, DebugTexture } from "@/lib/games/contract";
+import type { DebugRun, DebugScene, DebugTexture } from "@/lib/games/contract";
 import type { ManifestEntry } from "./assets";
 import type { Palette } from "./palette";
+import type { SceneFit } from "./scene-fit";
 
 const CONTEXT_KEY = "ibera:context";
 export const PALETTE_KEY = "ibera:palette";
@@ -11,11 +12,17 @@ export interface SceneTarget {
   id: string;
   x: number;
   y: number;
-  kind?: "item" | "obstacle";
+  kind?: "item" | "obstacle" | "decoy";
 }
 
 /** What a run scene reports for handle.debugRun(); the runtime adds difficulty, layout, timeScale and elapsedMs. */
 export type SceneRun = Pick<DebugRun, "durationMs" | "ended" | "player" | "kinematics" | "items" | "spawns">;
+
+/**
+ * What a fixed-scene game reports for handle.debugScene() (E2): scene px, plus the scene size and where the scene
+ * sits in the design (`fit`, design px). The runtime adds difficulty and layout and turns `fit` into the CSS view.
+ */
+export type SceneState = Omit<DebugScene, "difficulty" | "layout" | "view"> & { fit: SceneFit; size: { width: number; height: number } };
 
 /** Non-essential motion created through shared/motion.ts, for handle.debugMotion(). Times in game ms. */
 export interface MotionStats {
@@ -56,6 +63,8 @@ export interface GameContext {
   progress(hits: number, total?: number): void;
   /** Run games: reports onCollect when the count changed. */
   collect(collected: number, inChannel: number): void;
+  /** Secondary counter (E2): reports onCounter when the value changed. */
+  counter(value: number, max: number): void;
   announce(text: string): void;
   /** Single-phase games: reports onComplete once (total defaults to meta.total, score to hits) and stops all input. */
   complete(result: { completed: boolean; hits: number; total?: number; score?: number }): void;
@@ -68,6 +77,8 @@ export interface GameContext {
   setTargets(provider: (() => SceneTarget[]) | null): void;
   /** For handle.debugRun(): the run as the scene is playing it. */
   setRun(provider: (() => SceneRun) | null): void;
+  /** For handle.debugScene() (E2): the fixed scene as it is being played. */
+  setScene(provider: (() => SceneState) | null): void;
   /** Filled by prepareManifest() (assets.ts). */
   textureSources: Map<string, DebugTexture["source"]>;
   /** Filled by motion.ts. */

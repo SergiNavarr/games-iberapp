@@ -63,10 +63,25 @@ export interface GameMeta {
   defaultDifficulty?: string;
   /** Run marker label (onCollect), e.g. "recolectados". */
   collectLabel?: string;
-  /** Result screen when result.total is 0, instead of the usual title. */
-  emptyResult?: { title: string; text: string };
+  /**
+   * Result screen that replaces the usual title and score when `when` holds: "total" (default) = result.total is 0,
+   * "hits" = result.hits is 0 (E2).
+   */
+  emptyResult?: { title: string; text: string; when?: "total" | "hits" };
   /** Unit after the score on the result screen. Default "puntos". */
   pointsLabel?: string;
+  /**
+   * Games with a review (E2): who reports the hits. "review" (default, E1): the wrapper counts the review's right
+   * answers. "game": the game reports hits with onProgress during the canvas phase and the review answers are neutral;
+   * the hits marker shows in playing and in review, and the result is exactly what the review's onDone reports.
+   */
+  hitsFrom?: "review" | "game";
+  /** Visible text panel under the stage with the last announce() (E2). The aria-live region stays. */
+  textPanel?: boolean;
+  /** Label of the secondary counter (onCounter), e.g. "marcas". Without it the wrapper shows no counter (E2). */
+  counterLabel?: string;
+  /** Nothing on the canvas changes without input: no essential motion and no ambient effect (E2). */
+  stillWithoutInput?: boolean;
 }
 
 /** Highest result.total allowed for the difficulty played (meta.total when the game has no difficulties). */
@@ -90,10 +105,12 @@ export interface GameConfig {
   timeScale?: number;
   /** Assets loaded (or replaced by placeholders) and first scene ready. At most once. */
   onReady: () => void;
-  /** Hits changed (once per change, never per frame). Single-phase games only; run games score in their review. */
+  /** Hits changed (once per change, never per frame). Single-phase games, and games with meta.hitsFrom "game". */
   onProgress: (progress: { hits: number; total: number }) => void;
   /** Run marker: objects collected so far and objects in the run (once per change). */
   onCollect: (progress: { collected: number; inChannel: number }) => void;
+  /** Secondary counter, e.g. marks left out of the marks of the difficulty (once per change; E2). */
+  onCounter: (counter: { value: number; max: number }) => void;
   /** Spanish text for the wrapper's aria-live="polite" region. */
   announce: (text: string) => void;
   /** Single-phase games: the final result, at most once; afterwards the game ignores input. */
@@ -104,13 +121,16 @@ export interface GameConfig {
   onError: (error: unknown) => void;
 }
 
-/** A tappable target, in CSS px relative to the container (testHooks). In run games: a visible, uncollected item. */
+/**
+ * A tappable target, in CSS px relative to the container (testHooks). In run games: a visible, uncollected item. In
+ * scene games: an unmarked zone ("item" for a signal, which scores when marked; "decoy" spends a mark, scores nothing).
+ */
 export interface DebugTarget {
-  /** In run games, the id of debugRun().items. */
+  /** In run games, the id of debugRun().items; in scene games, the id of debugScene().zones. */
   id: string;
   x: number;
   y: number;
-  kind?: "item" | "obstacle";
+  kind?: "item" | "obstacle" | "decoy";
 }
 
 /** A manifest texture as the game uses it (testHooks). `frames`: sliced frames for spritesheets, 1 for images. */
@@ -180,6 +200,24 @@ export interface DebugMotion {
   collisions: number[];
 }
 
+/** A fixed scene with zones to mark (testHooks; E2). Positions in scene px. */
+export interface DebugScene {
+  difficulty: string | null;
+  layout: "landscape" | "portrait";
+  /** Scene px → CSS px relative to the container (as debugTargets): cssX = left + x × scale. width/height in scene px. */
+  view: { left: number; top: number; scale: number; width: number; height: number };
+  /** Marks of the difficulty played, and marks left. */
+  marks: number;
+  marksLeft: number;
+  hits: number;
+  score: number;
+  /** Keyboard crosshair; one arrow press moves it exactly `step`. */
+  crosshair: { x: number; y: number; step: number };
+  /** signal: scores when marked (debugTargets kind "item") · decoy: spends a mark without scoring. */
+  zones: { id: string; kind: "signal" | "decoy"; x: number; y: number; r: number; marked: boolean }[];
+  ended: boolean;
+}
+
 export interface GameHandle {
   /** Idempotent, safe before boot, releases the WebGL context and every listener. No callback runs afterwards. */
   destroy(): void;
@@ -196,6 +234,8 @@ export interface GameHandle {
   debugRun?(): DebugRun | null;
   /** Only with testHooks. */
   debugMotion?(): DebugMotion;
+  /** Only with testHooks; null for games without a fixed scene (E2). */
+  debugScene?(): DebugScene | null;
 }
 
 /** Synchronous: returns a usable handle right away, while the game is still booting. */

@@ -1,13 +1,13 @@
-// JUDGE · C31 (project "contract-start", next start): for dark-sky and night-voices, the "Próximamente" state is
+// JUDGE · C31 (the ONCE_VARIANT start project, next start): for dark-sky and night-voices, the "Próximamente" state is
 // visible (text and an illustration with size > 0), with no canvas (whole document), no role="alert" (inside the
 // GameStage root) and no Phaser chunk requested. The stage is scrolled into view first, so the 600 px preload would
 // have fired if the wrapper tried it.
-import { expect, GAME_ROOT, gotoBench, test } from "./support";
+import { expect, GAME_ROOT, gotoBench, ONCE_VARIANT, test } from "./support";
 import { watchJsBodies } from "./support-bundle";
 
 const COMING_SOON_ART = '[data-testid="coming-soon-art"]';
 
-test.skip(({ variant }) => variant.run, "no depende de la variante: corre una vez, en el proyecto de _dummy");
+test.skip(({ variant }) => variant.id !== ONCE_VARIANT.id, `no depende de la variante: corre una vez, en el proyecto de ${ONCE_VARIANT.id}`);
 
 for (const gameId of ["dark-sky", "night-voices"]) {
   test(`C31 · "Próximamente" en ${gameId}`, async ({ page }) => {
