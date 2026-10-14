@@ -129,6 +129,7 @@ export class ChannelScene extends Phaser.Scene {
           resolvedAt: o.resolvedAt,
         })),
         spawns: this.spawns.map((s) => ({ ...s })),
+        groupOrder: [...this.run.groupOrder],
       };
     });
 
@@ -209,7 +210,7 @@ export class ChannelScene extends Phaser.Scene {
         .map((o) => ({ id: o.plan.id, type: o.plan.type as WasteId, bin: o.plan.answer, points: WASTE[o.plan.type as WasteId].points }));
       for (const tween of this.rowing) tween?.stop(); // the canvas is still once the run is over (raw path keeps it)
       context.announce("Terminó el recorrido. Ahora, a clasificar lo que juntaste.");
-      context.runEnd({ collected });
+      context.runEnd({ collected, groupOrder: this.run.groupOrder });
     }
   }
 

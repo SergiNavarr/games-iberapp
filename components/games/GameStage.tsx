@@ -5,6 +5,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { GAMES } from "@/lib/data/games";
 import { getPortal } from "@/lib/data/portals";
 import {
+  answerCountSchema,
   gameResultSchema,
   maxTotal,
   TOKEN_NAMES,
@@ -46,7 +47,7 @@ export type GameStageEvent =
   | { event: "counter"; payload: { value: number; max: number } }
   | { event: "announce"; payload: string }
   | { event: "run-end"; payload: unknown }
-  | { event: "answer"; payload: { hit: boolean; hits: number; total: number } }
+  | { event: "answer"; payload: { hit: boolean; hits: number; total: number; count?: number } }
   | { event: "complete"; payload: GameResult }
   | { event: "error"; payload: string }
   | { event: "report"; payload: null }
@@ -290,25 +291,28 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
   );
 
   const onAnswer = useCallback(
-    ({ hit, announcement }: { hit: boolean; announcement: string }) => {
+    ({ hit, announcement, count }: { hit: boolean; announcement: string; count?: number }) => {
       const play = playRef.current;
       if (play.done) return;
+      // E3a: an answer may decide several units at once (a group). A bad count is a broken review, not a guess to fix.
+      if (count !== undefined && !answerCountSchema.safeParse(count).success) return fail(new Error("Respuesta inválida"));
+      const counted = count === undefined ? {} : { count }; // the log only carries what the review passed (C43)
       play.answered += 1;
       if (!scoreFromReview) {
         // Neutral answer (hitsFrom "game"): logged and announced; hits stay what the canvas reported.
-        emit({ event: "answer", payload: { hit, hits: play.gameHits, total: play.gameTotal } });
+        emit({ event: "answer", payload: { hit, hits: play.gameHits, total: play.gameTotal, ...counted } });
         say(announcement);
         return;
       }
-      if (hit) play.hits += 1;
-      emit({ event: "answer", payload: { hit, hits: play.hits, total: play.collected } });
+      if (hit) play.hits += count ?? 1;
+      emit({ event: "answer", payload: { hit, hits: play.hits, total: play.collected, ...counted } });
       if (hit) {
         setHits(play.hits);
         emit({ event: "progress", payload: { hits: play.hits, total: play.collected } });
       }
       say(announcement);
     },
-    [emit, say, scoreFromReview],
+    [emit, say, fail, scoreFromReview],
   );
 
   const onDone = useCallback(

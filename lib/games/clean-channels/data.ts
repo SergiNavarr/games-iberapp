@@ -73,6 +73,8 @@ export interface Run {
   durationMs: number;
   kinematics: { playerSpeed: number; pickupHalfWidth: number; visibleMs: number; playerMinX: number; playerMaxX: number };
   items: RunItem[];
+  /** Order of the review's groups, one per waste type (G1b): a seeded permutation of the 7 types. */
+  groupOrder: WasteId[];
 }
 
 export const difficultyOf = (id: string | undefined): Difficulty => (id === "normal" || id === "fast" ? id : "calm");
@@ -144,7 +146,11 @@ export function buildRun({ difficulty, seed, layout }: { difficulty?: string; se
   }
   items.sort((a, b) => a.arriveAt - b.arriveAt || a.id.localeCompare(b.id));
   const kinematics = { playerSpeed: KAYAK.speed, pickupHalfWidth: PICKUP_HALF_WIDTH, visibleMs, playerMinX: offset + KAYAK_RANGE.min, playerMaxX: offset + KAYAK_RANGE.max };
-  return { difficulty: level, layout, durationMs, kinematics, items };
+
+  // Review groups (G1b): drawn after everything above, so every seed keeps the run it had before the grouping.
+  const groupOrder = Object.keys(COMPOSITION[level]) as WasteId[];
+  shuffle(groupOrder, random);
+  return { difficulty: level, layout, durationMs, kinematics, items, groupOrder };
 }
 
 function shuffle<T>(list: T[], random: () => number) {
