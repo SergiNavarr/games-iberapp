@@ -29,7 +29,7 @@ export interface WasteInfo {
 
 export const WASTE: Record<WasteId, WasteInfo> = {
   batteries: {
-    name: "Bolsa de pilas",
+    name: "Pilas",
     bin: "special",
     points: 40,
     correct: "Las pilas tienen metales pesados. En un basural, el agua de lluvia los arrastra y terminan en la laguna.",
