@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, SCENE_VARIANT, type Variant } from "./tests/conformance/contract/variants";
+import { CLEAN_VARIANT, DUMMY_VARIANT, RUN_VARIANT, SCENE_VARIANT, WATER_VARIANT, type Variant } from "./tests/conformance/contract/variants";
 
 // JUDGE: conformance suite (tests/conformance). Separate from playwright.config.ts (the coder's e2e tests).
 // Own ports so it never touches the coder's dev server (3006): 3007 = next dev, 3008 = next start.
@@ -99,6 +99,17 @@ export default defineConfig<{}, { variant: Variant }>({
       name: "contract-scene-start",
       testMatch: /contract[\\/]c(02|31)-[^\\/]*\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: SCENE_VARIANT },
+    },
+    // G2: water-signs (scene game). Its own criteria C40–C42 are in c40-c42-water.spec.ts; C22 is check-assets.mjs.
+    {
+      name: "contract-water-dev",
+      testMatch: /contract[\\/]c(?!02-|31-)[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: DEV_URL, variant: WATER_VARIANT },
+    },
+    {
+      name: "contract-water-start",
+      testMatch: /contract[\\/]c02-[^\\/]*\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], channel: "chromium", baseURL: START_URL, variant: WATER_VARIANT },
     },
   ],
 });

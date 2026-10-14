@@ -1,9 +1,10 @@
-// JUDGE · E2, scene games only (`_dummy-scene`): C24 (keyboard), C25 (mouse and touch), C33 (canvas destroyed after
-// the observation phase) and C35 (difficulty from the DOM, read through debugScene() instead of debugRun()), as agreed
-// with the coordinator. C24: the crosshair is taken to every signal with single arrow presses (reading
-// debugScene().crosshair after each), marked with Enter, and the review is answered with the keyboard. C25: clicks and
-// taps on the debugTargets() centers of the signals, and the review with clicks and taps. Expected result: every signal
-// found, the maximum of data.ts (scoreOf) and total = signals in the scene.
+// JUDGE · E2 and G2, scene games only (`_dummy-scene`, water-signs): C24 (keyboard), C25 (mouse and touch), C33
+// (canvas destroyed after the observation phase) and C35 (difficulty from the DOM, read through debugScene() instead of
+// debugRun()), as agreed with the coordinator. C24: the crosshair is taken to every signal with single arrow presses
+// (reading debugScene().crosshair after each), marked with Enter, and the review is answered with the keyboard. C25:
+// clicks and taps on the debugTargets() centers of the signals, and the review with clicks and taps. Expected result:
+// every signal found, the maximum of the scene module (scoreOf) and total = signals in the scene. water-signs plays
+// them in Atento (variant.sceneFullDifficulty: exactly 8 marks), agreed in G2.
 import type { Page } from "@playwright/test";
 import {
   answerReview,
@@ -35,6 +36,12 @@ const lastPayload = (log: LogEntry[], event: string) => [...log].reverse().find(
 
 /** Every signal through `mode`, then the review (right answer) through the same mode. Returns the game's result. */
 async function playAll(page: Page, variant: Variant, mode: InputMode) {
+  if (variant.sceneFullDifficulty) {
+    // G2: C24/C25 in the difficulty with no spare mark (water-signs: Atento, exactly as many marks as signals).
+    const scene = await debugScene(page);
+    expect(scene?.difficulty, "[control] dificultad de la partida").toBe(variant.sceneFullDifficulty);
+    expect(scene?.marksLeft, "[control] tantas marcas como señales").toBe(sceneZoneIds(variant, "signal").length);
+  }
   const from = await logLength(page);
   await playScene(page, variant, sceneZoneIds(variant, "signal"), mode);
   await waitForLogEvent(page, "run-end", from, 30_000);
@@ -42,6 +49,9 @@ async function playAll(page: Page, variant: Variant, mode: InputMode) {
   await waitForState(page, "result", 10_000);
   return lastPayload((await readLog(page)).slice(from), "complete") as Result | undefined;
 }
+
+/** C24/C25 bench params: the variant's agreed difficulty (sceneFullDifficulty), else the default. */
+const fullParams = (variant: Variant) => fastParams(variant, variant.sceneFullDifficulty ? { difficulty: variant.sceneFullDifficulty } : {});
 
 function expectedFull(variant: Variant): Result {
   const signals = sceneZoneIds(variant, "signal");
@@ -52,7 +62,7 @@ function expectedFull(variant: Variant): Result {
 
 test("C24 · teclado: la mira con flechas hasta cada señal, Enter para marcar, la revisión con teclado y completa", async ({ page, variant }) => {
   test.setTimeout(240_000);
-  await gotoBench(page, variant.id, fastParams(variant));
+  await gotoBench(page, variant.id, fullParams(variant));
   await waitForState(page, "intro");
   await page.getByRole("button", { name: "Empezar", exact: true }).focus();
   await page.keyboard.press("Enter");
@@ -63,7 +73,7 @@ test("C24 · teclado: la mira con flechas hasta cada señal, Enter para marcar, 
 
 test("C25 · mouse: clics sobre las señales (debugTargets), la revisión con clics y completa", async ({ page, variant }) => {
   test.setTimeout(240_000);
-  await gotoBench(page, variant.id, fastParams(variant));
+  await gotoBench(page, variant.id, fullParams(variant));
   await page.getByRole("button", { name: "Empezar", exact: true }).click();
   await waitForState(page, "playing");
   const result = await playAll(page, variant, "mouse");
@@ -75,7 +85,7 @@ test.describe("C25 · toque", () => {
 
   test("C25 · toque: toques sobre las señales (debugTargets), la revisión con toques y completa", async ({ page, variant }) => {
     test.setTimeout(240_000);
-    await gotoBench(page, variant.id, fastParams(variant));
+    await gotoBench(page, variant.id, fullParams(variant));
     await page.getByRole("button", { name: "Empezar", exact: true }).tap();
     await waitForState(page, "playing");
     const result = await playAll(page, variant, "touch");

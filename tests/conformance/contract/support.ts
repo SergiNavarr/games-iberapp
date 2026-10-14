@@ -8,10 +8,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { test as base, type Page } from "@playwright/test";
-import { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, type Variant } from "./variants";
+import { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, WATER_VARIANT, type Variant } from "./variants";
 
 export { expect } from "@playwright/test";
-export { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, type Variant };
+export { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, WATER_VARIANT, type Variant };
 
 /** `variant` is a project option (playwright.conformance.config.ts): each W spec runs once per `_dummy` variant. */
 // Worker-scoped so beforeAll hooks can read it too. `{}`: no test-scoped fixtures (Playwright's own idiom).
@@ -719,12 +719,35 @@ export type SceneData = {
   scoreOf(markedIds: string[]): { hits: number; score: number };
 };
 
-/** lib/games/<id>/data.ts of a scene game (E2): pure, importable in Node without Phaser or DOM. */
+/** The scene game's pure module as exported (water-signs: kind "distractor", points in POINTS, QUESTION in meta.ts). */
+export type RawSceneModule = Omit<Partial<SceneData>, "ZONES"> & {
+  ZONES?: { id: string; kind: string; x: number; y: number; r: number; points?: number }[];
+  POINTS?: Record<string, number>;
+};
+
+export function loadRawScene(variant: Variant): RawSceneModule {
+  return importModule<RawSceneModule>(`${variant.dir}/${variant.sceneModule ?? "data.ts"}`);
+}
+
+/**
+ * The pure module of a scene game (variant.sceneModule; E2 dummy: data.ts, water-signs: hotspots.ts), importable in
+ * Node without Phaser or DOM, normalized to the hooks' vocabulary: kind "distractor" → "decoy", points from the zone or
+ * from POINTS[id] (0 if absent), QUESTION from the module or from meta.ts.
+ */
 export function loadSceneData(variant: Variant): SceneData {
-  const data = importModule<Partial<SceneData>>(`${variant.dir}/data.ts`);
-  for (const name of ["ZONES", "MARKS", "SCENE", "CROSSHAIR", "QUESTION", "scoreOf"] as const)
-    if (data[name] === undefined) throw new Error(`${variant.dir}/data.ts no exporta ${name}`);
-  return data as SceneData;
+  const file = `${variant.dir}/${variant.sceneModule ?? "data.ts"}`;
+  const raw = loadRawScene(variant);
+  for (const name of ["ZONES", "MARKS", "SCENE", "CROSSHAIR", "scoreOf"] as const) if (raw[name] === undefined) throw new Error(`${file} no exporta ${name}`);
+  const question = raw.QUESTION ?? importModule<{ QUESTION?: SceneData["QUESTION"] }>(`${variant.dir}/meta.ts`).QUESTION;
+  if (!question) throw new Error(`ni ${file} ni ${variant.dir}/meta.ts exportan QUESTION`);
+  return {
+    ZONES: (raw.ZONES ?? []).map((z) => ({ ...z, kind: z.kind === "distractor" ? "decoy" : (z.kind as "signal" | "decoy"), points: z.points ?? raw.POINTS?.[z.id] ?? 0 })),
+    MARKS: raw.MARKS as SceneData["MARKS"],
+    SCENE: raw.SCENE as SceneData["SCENE"],
+    CROSSHAIR: raw.CROSSHAIR as SceneData["CROSSHAIR"],
+    QUESTION: question,
+    scoreOf: raw.scoreOf as SceneData["scoreOf"],
+  };
 }
 
 /** First seed in [1, max] whose buildRun satisfies `ok`, or null. */

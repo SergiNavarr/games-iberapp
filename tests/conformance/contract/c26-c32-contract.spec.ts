@@ -491,6 +491,7 @@ test("C28 · panel de texto con el último announce (playing y review) y contado
 
 test("C28 · resultado vacío según meta.emptyResult.when: con la condición, título y texto de meta sin result-score; sin ella, result-score", async ({ page, variant }) => {
   test.skip(!variant.scene, "juego de escena (emptyResult.when hits)");
+  test.skip(variant.sceneEmptyInBrowser === false, "hits 0 no se puede producir como partida en este juego: se verifica en Node (acordado en G2)");
   test.setTimeout(240_000);
   const meta = await loadMeta(variant);
   const data = loadSceneData(variant);
@@ -524,6 +525,12 @@ test("C28 · resultado vacío según meta.emptyResult.when: con la condición, t
   expect(full?.hits ?? 0, "[control] todas las señales: hits > 0").toBeGreaterThan(0);
   await expect.soft(page.locator(RESULT_SCORE).first(), "result-score con el score sin la condición").toContainText(String(full?.score ?? "?"));
   await expect.soft(page.locator(RESULT_EMPTY), "result-empty no se muestra sin la condición").toBeHidden();
+});
+
+test('C28 · resultado vacío por hits, en Node: meta.emptyResult.when === "hits"', async ({ variant }) => {
+  test.skip(!variant.scene || variant.sceneEmptyInBrowser !== false, "solo juegos de escena donde hits 0 no se puede producir como partida (water-signs, acordado en G2)");
+  const meta = await loadMeta(variant);
+  expect(meta.emptyResult?.when, "meta.emptyResult.when").toBe("hits");
 });
 
 for (const viewport of [
