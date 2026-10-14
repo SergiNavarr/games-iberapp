@@ -3,8 +3,9 @@
 // from a screenshot, 500 ms after the theme change, and compares it with the new theme's computed --bg2 (tolerance per
 // channel: TOLERANCE); clean-channels runs it in both designs (1280 and 390 px). C20(b): with reducedMotion,
 // debugMotion().active = 0 in 11 samples over 1 s; the byte-identical captures only for games with essentialMotion
-// false. The [control] (without reducedMotion something is active) uses the ambient effect, or, for games without one
-// (clean-channels, agreed in G1), a collision with an obstacle: steer to it, release the keys, sample around the hit.
+// false. The [control] (without reducedMotion something is active) uses the ambient effect (since G1b also in
+// clean-channels: the paddle's stroke), or, for run games without one, a collision with an obstacle: steer to it,
+// release the keys, sample around the hit (no current game uses it).
 // E2, games that declare meta.stillWithoutInput: the [control] provokes the non-essential transition of a mark (the mark
 // is the only input and opens the window: 1 s from its `counter` event); debugMotion() is sampled inside the page every
 // ~10 ms from before the key press (the transition lasts ~150 ms).

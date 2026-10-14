@@ -2,6 +2,7 @@
 // buildRun()) and C39 (result according to the specification). Composition, points and maxima come from the
 // specification (tables "Distribución por dificultad" and "Residuos y contenedores", maxima corrected by the user to
 // 165 / 195 / 250); the N2 factors 0.7 and 0.6 s are the ones the user approved. v_k and R come from buildRun().kinematics.
+// G1b adds, in Node, the rename of `batteries` to "Pilas" (WASTE in meta.ts).
 import {
   answerReview,
   botParams,
@@ -10,6 +11,7 @@ import {
   expect,
   fastParams,
   gotoBench,
+  importModule,
   loadBuildRun,
   loadMeta,
   logLength,
@@ -47,6 +49,15 @@ type Result = { completed: boolean; hits: number; total: number; score: number }
 const lastPayload = (log: LogEntry[], event: string) => [...log].reverse().find((e) => e.event === event)?.payload;
 const itemsOf = (run: BuiltRun) => run.items.filter((i) => i.kind === "item");
 const maxScore = (run: BuiltRun) => itemsOf(run).reduce((sum, i) => sum + (POINTS[i.type] ?? 0), 0);
+
+// ---------- G1b ----------
+
+// User's request (G1b, 13/10/2026; check agreed with the coordinator): the waste `batteries` is renamed "Pilas".
+test('G1b · renombre (Node): WASTE.batteries.name de clean-channels es "Pilas"', ({ variant }) => {
+  const { WASTE } = importModule<{ WASTE?: Record<string, { name: string }> }>(`${variant.dir}/meta.ts`);
+  expect(WASTE, `[control] ${variant.dir}/meta.ts exporta WASTE`).toBeDefined();
+  expect(WASTE?.batteries?.name, "WASTE.batteries.name").toBe("Pilas");
+});
 
 // ---------- C37 ----------
 
