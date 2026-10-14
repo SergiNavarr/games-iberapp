@@ -182,3 +182,15 @@ C42 en detalle:
   - marcar al apoyar en vez de al soltar;
   - Enter muerto;
   - dificultad ignorada.
+
+## G1b · cambios sobre clean-channels
+
+**Paso 1** (assets nuevos, remada y renombre), con lo acordado con el coordinador:
+
+- **C22:** compara contra el bloque de 14 entradas del artefacto de G1 (se suma `kayak-paddle`). Un archivo ausente es advertencia; los reemplazos se validan por cabecera.
+- **C20(b):** el `[control]` de clean-channels pasa al efecto ambiental de la pala (`variants.ts`: `ambientMotion: true`). Ya no usa el choque: C36 cubre las sacudidas y los destellos con `reducedMotion`.
+- **Renombre, en Node:** `WASTE.batteries.name` de `meta.ts` es "Pilas" (`contract/c37-c39-game.spec.ts`).
+- **Alcance de la corrida única:**
+  - si el diff toca solo `lib/games/clean-channels/` y `public/games/clean-channels/`: los criterios de clean-channels, C22, las búsquedas estáticas y C01;
+  - si toca configuración, `package.json`, el lockfile, `.gitignore` o `scripts/`: la suite completa.
+- **Validación (14/10/2026):** contra el doble de clean-channels, la versión correcta pasa. Los tres defectos inyectados se detectan: sin efecto ambiental, pala que se mueve con `reducedMotion` y nombre viejo.

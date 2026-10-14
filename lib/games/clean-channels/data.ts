@@ -32,6 +32,12 @@ export const STRIP_OFFSET: Record<Layout, number> = { landscape: (1280 - CHANNEL
 export const DESIGN_HEIGHT: Record<Layout, number> = { landscape: 720, portrait: 900 };
 
 export const KAYAK = { width: 96, height: 140, speed: 600, fromBottom: 110, startX: CHANNEL.width / 2 } as const; // speed: px/s
+/**
+ * The paddler's paddle (G1b): decorative only, it never counts for picking up or hitting (the hull does). It rows the
+ * whole run: rotation ±swingDeg around its center plus a small x drift a quarter cycle apart (sin / cos), one stroke
+ * every cycleMs. Still with reducedMotion.
+ */
+export const PADDLE = { swingDeg: 34, cycleMs: 220, driftX: 6 } as const;
 export const WASTE_SIZE = 72;
 export const OBSTACLE_SIZE: Record<ObstacleId, { width: number; height: number }> = { camalote: { width: 120, height: 96 }, log: { width: 160, height: 72 } };
 /** A piece is collected if, when it crosses the kayak's line, the centers are this close (half widths added). */
@@ -73,7 +79,7 @@ export const difficultyOf = (id: string | undefined): Difficulty => (id === "nor
 
 /**
  * The planned run. The seed only changes order and positions (specification): the composition is fixed, there is
- * always at least one bag of batteries and both tricky pieces (oily container, styrofoam), and consecutive pieces
+ * always at least one batteries piece and both tricky pieces (oily container, styrofoam), and consecutive pieces
  * keep the generation margin. `random` defaults to the seeded generator; the game passes its own (same seed, same run).
  */
 export function buildRun({ difficulty, seed, layout }: { difficulty?: string; seed?: number; layout: Layout }, random: () => number = createRandom(seed)): Run {

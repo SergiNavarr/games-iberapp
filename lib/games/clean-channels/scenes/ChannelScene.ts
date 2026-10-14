@@ -12,6 +12,7 @@ import {
   KAYAK,
   KAYAK_RANGE,
   obstacleHalfWidth,
+  PADDLE,
   PICKUP_HALF_WIDTH,
   STRIP_OFFSET,
   WASTE_SIZE,
@@ -50,6 +51,8 @@ export class ChannelScene extends Phaser.Scene {
   private frame!: Phaser.GameObjects.Graphics;
   private kayak!: Phaser.GameObjects.Container;
   private hull!: Phaser.GameObjects.Image;
+  private paddleHolder!: Phaser.GameObjects.Container;
+  private rowing: (Phaser.Tweens.Tween | null)[] = [];
   private keys!: { left: Phaser.Input.Keyboard.Key; right: Phaser.Input.Keyboard.Key };
   private steer!: ReturnType<typeof pointerSteer>;
   private stepper!: ReturnType<typeof createStepper>;
@@ -82,9 +85,22 @@ export class ChannelScene extends Phaser.Scene {
     this.bankLeft = this.add.tileSprite(0, 0, CHANNEL.bank, 10, "bank-left").setOrigin(0, 0).setDepth(2);
     this.bankRight = this.add.tileSprite(0, 0, CHANNEL.bank, 10, "bank-right").setOrigin(0, 0).setDepth(2);
     this.frame = this.add.graphics().setDepth(20);
-    // The kayak tilts in its container; motion.impact shakes the hull inside it, so the two never fight.
+    // The kayak tilts in its container; motion.impact shakes the hull inside it, so the two never fight. The paddle
+    // (decorative, centered on the hull) sits in its own holder, which copies the hull's shake angle every frame, so
+    // its own rowing rotation never fights the shake either.
     this.hull = this.add.image(0, 0, "kayak");
-    this.kayak = this.add.container(0, 0, [this.hull]).setDepth(10);
+    const paddle = this.add.image(0, 0, "kayak-paddle");
+    this.paddleHolder = this.add.container(0, 0, [paddle]);
+    this.kayak = this.add.container(0, 0, [this.hull, this.paddleHolder]).setDepth(10);
+    // Rowing: rotation (sin) and a small x drift a quarter cycle later (cos). Non-essential: with reducedMotion the
+    // helper creates nothing and the paddle stays still at 0°.
+    if (!this.move.reduced) {
+      paddle.setAngle(-PADDLE.swingDeg).setX(-PADDLE.driftX);
+      const swing = this.move.ambient(paddle, { angle: PADDLE.swingDeg }, PADDLE.cycleMs / 2);
+      const drift = this.move.ambient(paddle, { x: PADDLE.driftX }, PADDLE.cycleMs / 2);
+      drift?.seek(PADDLE.cycleMs / 4);
+      this.rowing = [swing, drift];
+    }
 
     const keyboard = this.input.keyboard!;
     const { LEFT, RIGHT } = Phaser.Input.Keyboard.KeyCodes;
@@ -191,6 +207,7 @@ export class ChannelScene extends Phaser.Scene {
       const collected = this.objects
         .filter((o) => o.collected)
         .map((o) => ({ id: o.plan.id, type: o.plan.type as WasteId, bin: o.plan.answer, points: WASTE[o.plan.type as WasteId].points }));
+      for (const tween of this.rowing) tween?.stop(); // the canvas is still once the run is over (raw path keeps it)
       context.announce("Terminó el recorrido. Ahora, a clasificar lo que juntaste.");
       context.runEnd({ collected });
     }
@@ -208,6 +225,7 @@ export class ChannelScene extends Phaser.Scene {
     this.bankRight.tilePositionY = scroll;
     this.kayak.setPosition(offset + this.kayakX, lineY);
     this.kayak.angle = gameContext(this).reducedMotion ? 0 : this.tilt;
+    this.paddleHolder.angle = this.hull.angle; // the paddle shakes with the hull
     for (const o of this.objects) {
       if (o.spawnedAt === null) continue;
       const y = lineY - (o.plan.arriveAt - t) * speed;

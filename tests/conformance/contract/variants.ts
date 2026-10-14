@@ -12,7 +12,8 @@
 //  hasBuildRun: lib/games/<id>/data.ts exports a pure buildRun() (seeds for C28 empty result, C36 and C39 are searched
 //    in Node with it); without it the agreed dummy guarantees are used.
 //  ambientMotion: the game has a non-essential effect active without input (C20 b control); otherwise the control
-//    provokes a collision (run games) or a mark (stillWithoutInput games).
+//    provokes a collision (run games) or a mark (stillWithoutInput games). clean-channels: true since G1b (the
+//    paddle's stroke, motion.ambient; agreed: the collision control is dropped, C36 covers shakes and flashes).
 //  stillWithoutInput: copy of meta.stillWithoutInput (E2): no motion of its own, so the [control] of C08b/C08c uses
 //    input. The tests read the declaration from meta and check this copy matches it.
 //  c19Viewports: widths where C19 runs (clean-channels and _dummy-scene: both designs, agreed for G1 and E2).
@@ -46,7 +47,7 @@ export const CLEAN_VARIANT: Variant = {
   run: true,
   botScale: 3,
   hasBuildRun: true,
-  ambientMotion: false,
+  ambientMotion: true,
   c19Viewports: BOTH_DESIGNS,
 };
 export const SCENE_VARIANT: Variant = {
