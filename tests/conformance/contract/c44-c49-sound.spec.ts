@@ -52,6 +52,8 @@ const MUTE_NAME: string | null = "Silenciar";
 const MUTE = '[data-testid="mute"]';
 const SPRITE = '[data-testid="review-sprite"]';
 const WITHIN_MS = 500;
+/** C47 d: a start() this much before the log entry of its collect / answer belongs to the same handler. */
+const SAME_HANDLER_MS = 20;
 
 type AudioCtxRec = { t: number; active: boolean | null; logLength: number; state: string };
 type AudioRec = {
@@ -504,7 +506,12 @@ for (const reducedMotion of [false, true])
     const motion = await motionAtEnd(page);
     expect(motion, "[control] debugMotion() en el instante de run-end").not.toBeNull();
     const events = log.filter((e) => (e.event === "collect" && (e.payload as { collected: number }).collected > 0) || e.event === "answer");
-    const silent = events.filter((e) => !rec.starts.some((t) => t >= e.t && t <= e.t + 300)).map((e) => `${e.event} ${JSON.stringify(e.payload)} a los ${Math.round(e.t)} ms`);
+    // The bench writes the log entry when the wrapper receives the callback, which can come right after the game or
+    // the review started the sound in the same handler (measured in the verdict of 15/10/2026: start() 1 ms before the
+    // answer entry). Same-handler starts count: window [t − SAME_HANDLER_MS, t + 300].
+    const silent = events
+      .filter((e) => !rec.starts.some((t) => t >= e.t - SAME_HANDLER_MS && t <= e.t + 300))
+      .map((e) => `${e.event} ${JSON.stringify(e.payload)} a los ${Math.round(e.t)} ms (start() cercanos: ${JSON.stringify(rec.starts.filter((t) => Math.abs(t - e.t) <= 500).map((t) => Math.round(t - e.t)))})`);
     const collects = events.filter((e) => e.event === "collect").length;
     const answers = events.filter((e) => e.event === "answer").length;
     const collisions = motion?.collisions.length ?? 0;
