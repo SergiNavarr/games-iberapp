@@ -85,6 +85,20 @@ export interface GameMeta {
   counterLabel?: string;
   /** Nothing on the canvas changes without input: no essential motion and no ambient effect (E2). */
   stillWithoutInput?: boolean;
+  /** The game plays sound effects (E3b): the wrapper creates its AudioContext and shows the mute button. */
+  sounds?: boolean;
+}
+
+/**
+ * Sound output for games with meta.sounds (E3b), owned by the wrapper: created inside the click that starts a play,
+ * suspended while the game is paused or out of view, closed when the play ends. Effects are synthesized (no files).
+ */
+export interface GameAudio {
+  context: AudioContext;
+  /** The wrapper's master gain: connect every effect here (0 while muted). */
+  output: AudioNode;
+  /** True while the mute button is on: start no sound at all. */
+  muted(): boolean;
 }
 
 /** Highest result.total allowed for the difficulty played (meta.total when the game has no difficulties). */
@@ -106,6 +120,8 @@ export interface GameConfig {
   difficulty?: string;
   /** Multiplies game time (fixed-step simulation, so the schedule does not depend on it). Ignored without testHooks. */
   timeScale?: number;
+  /** Games with meta.sounds, when the wrapper could open audio in the start gesture (E3b). Never closed by the game. */
+  audio?: GameAudio;
   /** Assets loaded (or replaced by placeholders) and first scene ready. At most once. */
   onReady: () => void;
   /** Hits changed (once per change, never per frame). Single-phase games, and games with meta.hitsFrom "game". */
@@ -256,6 +272,10 @@ export interface ReviewProps {
   summary: unknown;
   meta: GameMeta;
   difficulty?: string;
+  /** The same assetBase the game got (E3b): the only place the review loads files from. */
+  assetBase: string;
+  /** The play's audio, when the game has meta.sounds (E3b). */
+  audio?: GameAudio;
   /**
    * Once per reviewed object, or per group of objects (E3a). The wrapper announces the text and, on a hit, adds
    * `count` hits (default 1, an integer ≥ 1: the units that answer decides) and reports progress once.

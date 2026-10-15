@@ -4,6 +4,7 @@ import { createStepper } from "@/lib/games/shared/clock";
 import { gameContext, onPalette } from "@/lib/games/shared/context";
 import { layoutFor } from "@/lib/games/shared/layout";
 import { motion } from "@/lib/games/shared/motion";
+import { playEffect } from "@/lib/games/shared/sound";
 import type { Palette } from "@/lib/games/shared/palette";
 import { pointerSteer } from "@/lib/games/shared/steer";
 import {
@@ -22,6 +23,7 @@ import {
   type RunItem,
 } from "../data";
 import { WASTE, type WasteId } from "../meta";
+import { SOUNDS } from "../sounds";
 
 interface Live {
   plan: RunItem;
@@ -194,12 +196,14 @@ export class ChannelScene extends Phaser.Scene {
           o.collected = true;
           this.collected += 1;
           context.collect(this.collected, inChannel);
+          playEffect(context.audio, SOUNDS.collect);
           context.announce(`Recolectaste: ${name}. Llevás ${this.collected}.`);
         } else {
           context.announce(`Se te pasó: ${name}.`);
         }
       } else if (distance <= obstacleHalfWidth(o.plan.type as ObstacleId)) {
         this.move.impact(this.hull);
+        playEffect(context.audio, SOUNDS.collision); // reducedMotion does not silence (G1b)
       }
     }
 

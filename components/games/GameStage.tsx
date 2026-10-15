@@ -9,6 +9,7 @@ import {
   gameResultSchema,
   maxTotal,
   TOKEN_NAMES,
+  type GameAudio,
   type GameHandle,
   type GameModule,
   type GameResult,
@@ -36,6 +37,10 @@ import type { GameId } from "@/types/portal";
 // E2, all opt-in through meta (games that do not declare them behave as in E1): hitsFrom "game" (the canvas reports
 // the hits and the review answers are neutral), textPanel (the last announcement in a visible panel), counterLabel (a
 // secondary counter fed by onCounter) and emptyResult.when (which result gets the empty screen).
+//
+// E3b, sound (meta.sounds): the wrapper owns one AudioContext per play. It is created inside the click that starts the
+// play (browsers only let audio start in a user gesture), handed to the game and to the review, suspended while the
+// game is paused or out of view, and closed when the play ends. The mute button (no storage) silences both.
 
 export type GameStageState = "coming-soon" | "intro" | "loading" | "playing" | "review" | "result" | "error";
 
@@ -51,6 +56,7 @@ export type GameStageEvent =
   | { event: "complete"; payload: GameResult }
   | { event: "error"; payload: string }
   | { event: "report"; payload: null }
+  | { event: "mute"; payload: { muted: boolean } }
   | { event: "destroyed"; payload: null }
   | { event: "persisted"; payload: ProgressEntry };
 
@@ -135,6 +141,21 @@ interface ReviewView {
   Review: ComponentType<ReviewProps>;
   summary: unknown;
   difficulty: string | undefined;
+  audio: GameAudio | undefined;
+}
+
+/** The play's audio (E3b): the context, its master gain and what the game and the review get. */
+interface PlayAudio {
+  context: AudioContext;
+  gain: GainNode;
+  api: GameAudio;
+}
+
+type AudioContextClass = typeof AudioContext;
+
+/** Read at call time (inside the click), never at import: a test can replace the constructor before the page runs. */
+function audioContextClass(): AudioContextClass | undefined {
+  return window.AudioContext ?? (window as unknown as { webkitAudioContext?: AudioContextClass }).webkitAudioContext;
 }
 
 function initialDifficulty(entry: ReadyEntry | null, preferred: string | undefined) {
@@ -164,6 +185,10 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
   const [review, setReview] = useState<ReviewView | null>(null);
   const [result, setResult] = useState<GameResult | null>(null);
   const [live, setLive] = useState({ text: "", n: 0 });
+  const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
+  const audioRef = useRef<PlayAudio | null>(null);
+  const audioAutoPaused = useRef(false);
   const rootRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const reviewRef = useRef<HTMLDivElement>(null);
@@ -200,12 +225,46 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     },
     [emit],
   );
+  /** Closes the play's AudioContext, if any (end of the play, error, unmount, or a new play). */
+  const closeAudio = useCallback(() => {
+    const audio = audioRef.current;
+    audioRef.current = null;
+    audioAutoPaused.current = false;
+    if (audio && audio.context.state !== "closed") audio.context.close().catch(() => undefined);
+  }, []);
+
+  /** Inside the click that starts a play: a fresh AudioContext for games with sound (none without Web Audio). */
+  const openAudio = useCallback(() => {
+    closeAudio();
+    const AudioContextClass = meta?.sounds ? audioContextClass() : undefined;
+    if (!AudioContextClass) return;
+    try {
+      const context = new AudioContextClass();
+      const gain = context.createGain();
+      gain.gain.value = mutedRef.current ? 0 : 1;
+      gain.connect(context.destination);
+      audioRef.current = { context, gain, api: { context, output: gain, muted: () => mutedRef.current } };
+    } catch {
+      audioRef.current = null; // no audio: the game plays silent
+    }
+  }, [meta, closeAudio]);
+
+  const toggleMute = () => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    const audio = audioRef.current;
+    if (audio) audio.gain.gain.setValueAtTime(next ? 0 : 1, audio.context.currentTime);
+    emit({ event: "mute", payload: { muted: next } });
+  };
+
   const fail = useCallback(
     (error: unknown) => {
+      closeAudio();
       emit({ event: "error", payload: error instanceof Error ? error.message : String(error) });
       go("error");
     },
-    [emit, go],
+    [emit, go, closeAudio],
   );
 
   /** The final result, from the game (onComplete) or from the review (onDone): validate, show, save. */
@@ -214,6 +273,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       if (!meta) return;
       const parsed = gameResultSchema.safeParse(payload);
       if (!parsed.success || parsed.data.total > maxTotal(meta, playRef.current.difficulty)) return fail(new Error("Resultado inválido"));
+      closeAudio(); // the play is over: nothing sounds on the result screen
       setHits(parsed.data.hits);
       setDenominator(parsed.data.total);
       setResult(parsed.data);
@@ -221,14 +281,27 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       go("result");
       emit({ event: "persisted", payload: saveBestResult(id, parsed.data) });
     },
-    [meta, id, emit, go, fail],
+    [meta, id, emit, go, fail, closeAudio],
   );
 
   // Only on transitions, and only resuming what the wrapper itself paused: a repeated observer entry must not undo
   // a pause somebody else asked for through the handle.
   const applyPause = useCallback(() => {
     const handle = handleRef.current;
-    if (!handle) return;
+    if (!handle) {
+      // No game (the review): the wrapper suspends the play's audio itself, with the same rules (E3b).
+      const audio = audioRef.current;
+      if (!audio || audio.context.state === "closed") return;
+      const { offscreen, hidden } = pauseRef.current;
+      if ((offscreen || hidden) && !audioAutoPaused.current) {
+        audioAutoPaused.current = true;
+        audio.context.suspend().catch(() => undefined);
+      } else if (!(offscreen || hidden) && audioAutoPaused.current) {
+        audioAutoPaused.current = false;
+        audio.context.resume().catch(() => undefined);
+      }
+      return;
+    }
     const { offscreen, hidden, result: atResult } = pauseRef.current;
     const shouldPause = offscreen || hidden || atResult;
     if (shouldPause && !autoPaused.current) {
@@ -280,7 +353,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       go("review");
       promise.then(
         ({ Review }) => {
-          if (playRef.current.token === token) setReview({ Review, summary, difficulty: play.difficulty });
+          if (playRef.current.token === token) setReview({ Review, summary, difficulty: play.difficulty, audio: audioRef.current?.api });
         },
         (error) => {
           if (playRef.current.token === token) fail(error);
@@ -374,6 +447,7 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
           testHooks: dev?.testHooks,
           difficulty: play.difficulty,
           timeScale: dev?.testHooks ? dev.timeScale : undefined,
+          audio: audioRef.current?.api,
           onReady: () => {
             if (disposed) return;
             emit({ event: "ready", payload: null });
@@ -471,8 +545,12 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
     handleRef.current?.setTheme(theme, readGameTokens());
   }, [theme]);
 
+  // Leaving the page section (unmount) ends the play: its AudioContext is closed.
+  useEffect(() => closeAudio, [closeAudio]);
+
   const start = () => {
     if (!meta) return;
+    openAudio(); // first, synchronously: this click is the user gesture that lets audio start (E3b)
     const max = maxTotal(meta, difficulty);
     playRef.current = newPlay(playRef.current.token + 1, difficulty, max);
     loadReview(); // ready by the end of the run
@@ -505,9 +583,12 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
       aria-label={title}
       className="flex w-full flex-col gap-4 text-fg transition-opacity duration-500 starting:opacity-0"
     >
-      <header className="flex flex-col gap-2">
-        <span className="eyebrow text-mute">{portal ? `Aprendelo jugando · ${portal}` : "Aprendelo jugando"}</span>
-        <h3 className="title-display m-0 text-[clamp(30px,4vw,48px)] leading-[0.95] text-head">{title}</h3>
+      <header className="flex items-end justify-between gap-4">
+        <div className="flex flex-col gap-2">
+          <span className="eyebrow text-mute">{portal ? `Aprendelo jugando · ${portal}` : "Aprendelo jugando"}</span>
+          <h3 className="title-display m-0 text-[clamp(30px,4vw,48px)] leading-[0.95] text-head">{title}</h3>
+        </div>
+        {meta?.sounds && <MuteButton muted={muted} onToggle={toggleMute} />}
       </header>
 
       {!ready || !meta ? (
@@ -584,7 +665,15 @@ function GameStageView({ id, entry, title, portal, onReport, devOptions }: ViewP
             {state === "review" && (
               <div ref={reviewRef} data-testid="review" tabIndex={-1} aria-label={`Revisión de ${title}`} className="absolute inset-0 overflow-y-auto bg-page-2 p-[clamp(20px,4vw,48px)] outline-offset-[-4px]">
                 {review ? (
-                  <review.Review summary={review.summary} meta={meta} difficulty={review.difficulty} onAnswer={onAnswer} onDone={onDone} />
+                  <review.Review
+                    summary={review.summary}
+                    meta={meta}
+                    difficulty={review.difficulty}
+                    assetBase={assetBaseFor(id)}
+                    audio={review.audio}
+                    onAnswer={onAnswer}
+                    onDone={onDone}
+                  />
                 ) : (
                   <span className="eyebrow animate-ib-breathe text-mute">Cargando…</span>
                 )}
@@ -699,6 +788,28 @@ function StageButton({ onClick, primary = false, children }: { onClick: () => vo
       }`}
     >
       {children}
+    </button>
+  );
+}
+
+/** Sound on/off for games with meta.sounds (E3b): a toggle button with a fixed name, pressed = muted. */
+function MuteButton({ muted, onToggle }: { muted: boolean; onToggle: () => void }) {
+  const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  return (
+    <button
+      type="button"
+      data-testid="mute"
+      aria-pressed={muted}
+      onClick={onToggle}
+      className={`flex h-10 flex-none items-center gap-2 rounded-[10px] border px-3 text-[15px] font-medium ${
+        muted ? "border-transparent bg-btn text-btn-fg" : "border-rule bg-transparent text-fg"
+      }`}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" className="block">
+        <path {...stroke} d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" />
+        {muted ? <path {...stroke} d="m16 9.5 5 5m0-5-5 5" /> : <path {...stroke} d="M16 9a4.5 4.5 0 0 1 0 6m2.5-8.5a8 8 0 0 1 0 11" />}
+      </svg>
+      Silenciar
     </button>
   );
 }

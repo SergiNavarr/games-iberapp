@@ -3,12 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReviewProps } from "@/lib/games/contract";
 import { BINS, WASTE, type BinId, type WasteId } from "@/lib/games/clean-channels/meta";
+import { SOUNDS } from "@/lib/games/clean-channels/sounds";
+import { playEffect } from "@/lib/games/shared/sound";
 
 // Phase 3 of clean-channels (specification, G1b): one group per waste type collected, four bins, immediate feedback
 // that explains why, once per group. The groups follow the run's seeded order (buildRun().groupOrder). A right answer
 // adds the type's points for every unit of the group; a wrong one adds nothing, never subtracts, and still shows the
 // explanation. The result counts units: total = pieces collected, hits = pieces in groups classified right. A group of
-// one looks exactly as before. Loaded by GameStage after onRunEnd (its own chunk, no Phaser). Test interface (E1, per
+// one looks exactly as before. Each group shows the waste's sprite from assetBase (DOM, never canvas) next to its name;
+// a missing file leaves the name only. Answers sound right / wrong through the play's audio (nothing while muted).
+// Loaded by GameStage after onRunEnd (its own chunk, no Phaser). Test interface (E1, per
 // group in G1b): review-item (data-item-id = waste type, data-count, data-item-ids = debugRun().items ids),
 // review-option-<bin>, review-feedback, review-next.
 
@@ -44,10 +48,11 @@ function groupsOf(summary: unknown): Group[] {
 
 const binLabel = (id: BinId) => BINS.find((b) => b.id === id)?.label ?? id;
 
-export function Review({ summary, onAnswer, onDone }: ReviewProps) {
+export function Review({ summary, assetBase, audio, onAnswer, onDone }: ReviewProps) {
   const [groups] = useState(() => groupsOf(summary));
   const [index, setIndex] = useState(0);
   const [answer, setAnswer] = useState<BinId | null>(null);
+  const [missing, setMissing] = useState<ReadonlySet<WasteId>>(() => new Set());
   const tally = useRef({ hits: 0, score: 0 });
   const next = useRef<HTMLButtonElement>(null);
   const units = groups.reduce((sum, g) => sum + g.ids.length, 0);
@@ -78,6 +83,7 @@ export function Review({ summary, onAnswer, onDone }: ReviewProps) {
       tally.current.score += info.points * count;
     }
     setAnswer(bin);
+    playEffect(audio, right ? SOUNDS.right : SOUNDS.wrong);
     const where = binLabel(info.bin);
     onAnswer({
       hit: right,
@@ -104,9 +110,25 @@ export function Review({ summary, onAnswer, onDone }: ReviewProps) {
       <span className="eyebrow text-mute">
         Clasificación · {index + 1} de {groups.length}
       </span>
-      <div data-testid="review-item" data-item-id={group.type} data-count={count} data-item-ids={group.ids.join(" ")} className="flex flex-col gap-1">
-        <h4 className="title-display m-0 text-[clamp(24px,3vw,34px)] leading-none text-head">{title}</h4>
-        <p className="m-0 text-[17px] leading-snug text-mute">{many ? "¿En qué contenedor van?" : "¿En qué contenedor va?"}</p>
+      <div data-testid="review-item" data-item-id={group.type} data-count={count} data-item-ids={group.ids.join(" ")} className="flex items-center gap-4">
+        {!missing.has(group.type) && (
+          // A small sprite from the game's assetBase, as is: next/image would add its optimizer route for nothing.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={group.type}
+            data-testid="review-sprite"
+            src={`${assetBase}trash-${group.type}.webp`}
+            width={72}
+            height={72}
+            alt=""
+            className="block h-[72px] w-[72px] flex-none"
+            onError={() => setMissing((prev) => new Set(prev).add(group.type))}
+          />
+        )}
+        <div className="flex flex-col gap-1">
+          <h4 className="title-display m-0 text-[clamp(24px,3vw,34px)] leading-none text-head">{title}</h4>
+          <p className="m-0 text-[17px] leading-snug text-mute">{many ? "¿En qué contenedor van?" : "¿En qué contenedor va?"}</p>
+        </div>
       </div>
       <div className="grid w-full max-w-[640px] grid-cols-2 gap-3">
         {BINS.map((bin) => {
