@@ -1,5 +1,5 @@
 import type * as Phaser from "phaser";
-import type { DebugRun, DebugScene, DebugTexture } from "@/lib/games/contract";
+import type { DebugRun, DebugScene, DebugTexture, GameAudio } from "@/lib/games/contract";
 import type { ManifestEntry } from "./assets";
 import type { Palette } from "./palette";
 import type { SceneFit } from "./scene-fit";
@@ -51,6 +51,8 @@ export interface GameContext {
   readonly timeScale: number;
   /** Seeded when the config has a seed. Use it for anything random in the mechanic. */
   readonly random: () => number;
+  /** config.audio (games with meta.sounds): play effects with shared/sound.ts playEffect. */
+  readonly audio: GameAudio | undefined;
   /** Game time in ms: scaled by timeScale, pauses excluded. Drive every simulation with it (see clock.ts). */
   now(): number;
   /** Simulation ms of the run (clock.ts registers it), or now() for games without a stepper. The time base of debugMotion. */

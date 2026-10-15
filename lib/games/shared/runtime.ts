@@ -73,6 +73,7 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
     difficulty: config.difficulty,
     timeScale,
     random: createRandom(config.seed),
+    audio: config.audio,
     now: () => clock,
     simNow: () => (simClock ? simClock() : clock),
     setSimClock(next) {
@@ -246,10 +247,13 @@ export function mountPhaserGame(container: HTMLElement, config: GameConfig, defi
       if (destroyed || paused) return;
       paused = true;
       if (game.isRunning) game.loop.sleep();
+      // E3b: no sound while paused. The context is the wrapper's: suspended here, never closed.
+      if (config.audio?.context.state === "running") config.audio.context.suspend().catch(() => undefined);
     },
     resume() {
       if (destroyed || !paused) return;
       paused = false;
+      if (config.audio?.context.state === "suspended") config.audio.context.resume().catch(() => undefined);
       lastStep = null; // the paused gap is not game time
       if (game.isRunning && !game.loop.running) {
         game.loop.wake();

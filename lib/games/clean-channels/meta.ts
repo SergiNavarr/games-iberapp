@@ -109,4 +109,6 @@ export const meta: GameMeta = {
     text: "Movete con las flechas o arrastrando el dedo para cruzarte con los residuos antes de que pasen de largo. En modo Tranquilo vienen más espaciados.",
   },
   pointsLabel: "puntos de daño evitado",
+  // Four synthesized effects (sounds.ts): the wrapper owns the audio and shows the mute button (G1b).
+  sounds: true,
 };
