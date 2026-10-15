@@ -34,6 +34,9 @@ import {
   readLog,
   readRunProbe,
   REVIEW_FEEDBACK,
+  RUN_VARIANT,
+  runAtEnd,
+  hookRunEndSnapshot,
   REVIEW_NEXT,
   REVIEW_OPTION_PREFIX,
   RESULT_EMPTY,
@@ -57,6 +60,7 @@ import {
   type LogEntry,
   type Variant,
 } from "./support";
+import { POINTS } from "./spec-clean-channels";
 
 const PROGRESS_KEY = "ibera-games-progress";
 const INPUT_SETTLE_MS = 300;
@@ -166,11 +170,12 @@ test("C26 · después de onComplete ningún input cambia hits (camino raw, tecla
   expect.soft(later.filter((e) => e.event === "complete"), "onComplete repetido").toEqual([]);
 });
 
-test("C26 · por fase: cada recolección 1 onCollect (+1) y ≥ 1 announce; en la revisión, acierto 1 onProgress (+1), error 0, siempre ≥ 1 announce; onDone 1 vez", async ({ page, variant }) => {
+test("C26 · por fase: cada recolección 1 onCollect (+1) y ≥ 1 announce; en la revisión, acierto 1 onProgress (+1, o + el tamaño del grupo), error 0, siempre ≥ 1 announce; onDone 1 vez", async ({ page, variant }) => {
   test.skip(!variant.run, "juego con recorrido");
   test.setTimeout(240_000);
   await gotoBench(page, variant.id, botParams(variant));
   await startGame(page);
+  await hookRunEndSnapshot(page);
   // First answer right, second wrong, the rest right: both review paths get exercised.
   const { from, answered } = await playRun(page, (i) => i !== 1);
   await page.waitForTimeout(1_000);
@@ -189,23 +194,55 @@ test("C26 · por fase: cada recolección 1 onCollect (+1) y ≥ 1 announce; en l
     expect.soft(announces, `recolección ${k + 1}: announce después de su onCollect`).toBeGreaterThanOrEqual(1);
   });
 
-  // Review phase.
+  // Review phase. G1b E3a (clean-channels): one review-item per group (data-count = n): answer.count = n, a hit adds n,
+  // the group's data-item-ids are the collected items of that type (debugRun() at run-end) and the counts add up to
+  // the collected units. _dummy-run keeps one item per answer and its answer payload has no count.
+  const grouped = answered.some((a) => a.count !== null);
+  const end = grouped ? await runAtEnd(page) : null;
+  if (grouped) {
+    expect(end, "[control] debugRun() en el instante de run-end").not.toBeNull();
+    expect(answered.length, "[control] al menos 2 grupos: la revisión no ejercita acierto y error").toBeGreaterThanOrEqual(2);
+  }
   let hits = 0;
+  let score = 0;
   for (const [k, a] of answered.entries()) {
     const seg = log.slice(a.logFrom, a.logTo);
     const answers = seg.filter((e) => e.event === "answer");
     const progress = seg.filter((e) => e.event === "progress");
-    const hit = (answers[0]?.payload as { hit?: boolean } | undefined)?.hit;
-    expect.soft(answers.length, `respuesta ${k + 1}: eventos answer`).toBe(1);
-    expect.soft(hit, `respuesta ${k + 1}: la opción de debugRun().items[].answer cuenta como acierto y otra como error`).toBe(a.wantCorrect);
-    expect.soft(seg.filter((e) => e.event === "announce").length, `respuesta ${k + 1}: announce`).toBeGreaterThanOrEqual(1);
+    const payload = answers[0]?.payload as { hit?: boolean; count?: number } | undefined;
+    const hit = payload?.hit;
+    const n = a.count ?? 1;
+    const where = `respuesta ${k + 1}${a.count !== null ? ` (grupo ${a.id} × ${a.count})` : ""}`;
+    expect.soft(answers.length, `${where}: eventos answer`).toBe(1);
+    expect.soft(hit, `${where}: la opción de debugRun().items[].answer cuenta como acierto y otra como error`).toBe(a.wantCorrect);
+    expect.soft(seg.filter((e) => e.event === "announce").length, `${where}: announce`).toBeGreaterThanOrEqual(1);
+    if (a.count !== null) {
+      expect.soft(payload?.count, `${where}: answer.count = data-count`).toBe(a.count);
+      const expectedIds = (end?.items ?? []).filter((i) => i.kind === "item" && i.collected && i.type === a.id).map((i) => i.id);
+      expect.soft(a.itemIds?.length, `${where}: cantidad de data-item-ids = data-count`).toBe(a.count);
+      expect.soft([...(a.itemIds ?? [])].sort(), `${where}: data-item-ids = ítems recolectados de ese tipo (debugRun() en run-end)`).toEqual(expectedIds.sort());
+    } else if (variant.id === RUN_VARIANT.id) {
+      expect.soft(Object.keys(payload ?? {}).sort(), `${where}: claves del payload de answer (sin count)`).toEqual(["hit", "hits", "total"]);
+    }
     if (hit) {
-      expect.soft(progress.length, `respuesta ${k + 1} (acierto): onProgress`).toBe(1);
-      if (progress[0]) expect.soft(progressOf(progress[0]).hits, `respuesta ${k + 1} (acierto): hits`).toBe(hits + 1);
-      hits++;
-    } else expect.soft(progress.length, `respuesta ${k + 1} (error): onProgress`).toBe(0);
+      expect.soft(progress.length, `${where} (acierto): onProgress`).toBe(1);
+      if (progress[0]) expect.soft(progressOf(progress[0]).hits, `${where} (acierto): hits`).toBe(hits + n);
+      hits += n;
+      score += (POINTS[a.id] ?? 0) * n;
+    } else expect.soft(progress.length, `${where} (error): onProgress`).toBe(0);
   }
-  expect.soft(log.slice(from).filter((e) => e.event === "complete").length, "onDone → complete").toBe(1);
+  const completes = log.slice(from).filter((e) => e.event === "complete");
+  expect.soft(completes.length, "onDone → complete").toBe(1);
+  if (grouped) {
+    expect.soft(answered.reduce((sum, a) => sum + (a.count ?? 0), 0), "suma de data-count = unidades recolectadas").toBe(values.length);
+    // Agreed in G1b: result in units, with the specification's points per type.
+    expect.soft(completes[0]?.payload, "result en unidades: { completed: true, total: recolectados, hits: Σ n acertados, score: Σ puntos(tipo) × n }").toEqual({
+      completed: true,
+      total: values.length,
+      hits,
+      score,
+    });
+  }
 });
 
 for (const answer of ["acertada", "errada"] as const)

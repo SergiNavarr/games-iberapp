@@ -2,7 +2,10 @@
 // buildRun()) and C39 (result according to the specification). Composition, points and maxima come from the
 // specification (tables "Distribución por dificultad" and "Residuos y contenedores", maxima corrected by the user to
 // 165 / 195 / 250); the N2 factors 0.7 and 0.6 s are the ones the user approved. v_k and R come from buildRun().kinematics.
-// G1b adds, in Node, the rename of `batteries` to "Pilas" (WASTE in meta.ts).
+// G1b adds, in Node, the rename of `batteries` to "Pilas" (WASTE in meta.ts). G1b E3a (paso 2) adds to C38, as agreed:
+// in Node, buildRun without groupOrder = buildRun of 8af40ef for the 200 seeds × 3 × 2, groupOrder a permutation of
+// the 7 types with ≥ 2 distinct orders; in the browser, parity of groupOrder (seeds 1, 7, 42) and the order of the
+// review = groupOrder filtered to the collected types.
 import {
   answerReview,
   botParams,
@@ -11,11 +14,14 @@ import {
   expect,
   fastParams,
   gotoBench,
+  hookRunEndSnapshot,
   importModule,
   loadBuildRun,
+  loadFrozenBuildRun,
   loadMeta,
   logLength,
   readLog,
+  REVIEW_ITEM,
   RESULT_EMPTY,
   RESULT_SCORE,
   RESULT_TITLE,
@@ -26,24 +32,24 @@ import {
   waitForLogEvent,
   waitForState,
   debugRun,
+  runAtEnd,
   type BuiltRun,
   type LogEntry,
 } from "./support";
+import { COMPOSITION, DIFFICULTIES, EXPECTED_MAX, LAYOUTS, POINTS, WASTE_TYPES } from "./spec-clean-channels";
 
 test.skip(({ variant }) => !variant.hasBuildRun, "criterios de juegos con buildRun (clean-channels)");
 
-const DIFFICULTIES = ["calm", "normal", "fast"] as const;
-const LAYOUTS = ["landscape", "portrait"] as const;
-const COMPOSITION: Record<string, Record<string, number>> = {
-  calm: { batteries: 1, "oily-container": 2, styrofoam: 1, "glass-bottle": 2, "pet-bottle": 1, can: 2, "fruit-peel": 1 },
-  normal: { batteries: 1, "oily-container": 2, styrofoam: 2, "glass-bottle": 2, "pet-bottle": 2, can: 2, "fruit-peel": 1 },
-  fast: { batteries: 2, "oily-container": 2, styrofoam: 2, "glass-bottle": 2, "pet-bottle": 3, can: 2, "fruit-peel": 2 },
-};
-const POINTS: Record<string, number> = { batteries: 40, "oily-container": 25, styrofoam: 20, "glass-bottle": 10, "pet-bottle": 10, can: 10, "fruit-peel": 5 };
-const EXPECTED_MAX: Record<string, number> = { calm: 165, normal: 195, fast: 250 };
 const N2_MARGIN = 0.7;
 const N2_MIN_GAP_MS = 600;
 const SEEDS = 200;
+/** G1b E3a: the schedule of every seed must stay as in main before the change (agreed with the coordinator). */
+const FROZEN_REF = "8af40ef";
+/** JSON with object keys sorted at every level (array order kept): same content, any key order. */
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_k, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) : v,
+  );
 
 type Result = { completed: boolean; hits: number; total: number; score: number };
 const lastPayload = (log: LogEntry[], event: string) => [...log].reverse().find((e) => e.event === event)?.payload;
@@ -119,9 +125,56 @@ for (const layout of LAYOUTS)
         const run = await debugRun(page);
         expect(run, `debugRun() semilla ${seed}`).not.toBeNull();
         expect(run?.layout, `[control] diseño del navegador (semilla ${seed})`).toBe(layout);
-        expect.soft(pick(run?.items ?? []), `semilla ${seed}: items del navegador = buildRun en Node`).toEqual(pick(buildRun({ difficulty: d, seed, layout }).items));
+        const built = buildRun({ difficulty: d, seed, layout });
+        expect.soft(pick(run?.items ?? []), `semilla ${seed}: items del navegador = buildRun en Node`).toEqual(pick(built.items));
+        expect.soft(run?.groupOrder, `semilla ${seed}: debugRun().groupOrder = buildRun en Node`).toEqual(built.groupOrder);
       }
     });
+
+test(`C38 · Node: buildRun sin groupOrder = el de ${FROZEN_REF} (${SEEDS} semillas × 3 × 2); groupOrder es una permutación de los 7 tipos, con ≥ 2 órdenes distintos`, ({ variant }) => {
+  const buildRun = loadBuildRun(variant);
+  const frozen = loadFrozenBuildRun(variant, FROZEN_REF);
+  const changed: string[] = [];
+  const badOrder: string[] = [];
+  const orders = new Set<string>();
+  for (const d of DIFFICULTIES)
+    for (const layout of LAYOUTS)
+      for (let seed = 1; seed <= SEEDS; seed++) {
+        const where = `${d}/${layout}/semilla ${seed}`;
+        const { groupOrder, ...rest } = buildRun({ difficulty: d, seed, layout });
+        const before = frozen({ difficulty: d, seed, layout });
+        if (canonical(rest) !== canonical(before)) changed.push(where);
+        const sorted = [...(groupOrder ?? [])].sort();
+        if (JSON.stringify(sorted) !== JSON.stringify([...WASTE_TYPES].sort())) badOrder.push(`${where}: ${JSON.stringify(groupOrder)}`);
+        orders.add(JSON.stringify(groupOrder));
+      }
+  test.info().annotations.push({ type: "info", description: `${orders.size} órdenes distintos en ${SEEDS * 6} recorridos; ${changed.length} cronogramas distintos de ${FROZEN_REF}` });
+  expect.soft(changed.slice(0, 20), `recorridos cuyo buildRun (sin groupOrder) difiere del de ${FROZEN_REF}: ${changed.length} (primeros 20)`).toEqual([]);
+  expect.soft(badOrder.slice(0, 20), `groupOrder que no es una permutación de los 7 tipos: ${badOrder.length} (primeros 20)`).toEqual([]);
+  expect.soft(orders.size, "órdenes distintos de groupOrder entre los recorridos (sembrado: ≥ 2)").toBeGreaterThanOrEqual(2);
+});
+
+test("C38 · el orden de la revisión es debugRun().groupOrder filtrado a los tipos recolectados", async ({ page, variant }) => {
+  test.setTimeout(240_000);
+  await gotoBench(page, variant.id, botParams(variant, { difficulty: "fast" }));
+  await startGame(page);
+  await hookRunEndSnapshot(page);
+  const order = (await debugRun(page))?.groupOrder ?? null;
+  expect(order, "[control] debugRun().groupOrder").not.toBeNull();
+  const answers = await captureAnswers(page);
+  const from = await logLength(page);
+  await steerRun(page, "keyboard", "all");
+  await waitForLogEvent(page, "run-end", from, 60_000);
+  const answered = await answerReview(page, answers, "keyboard", () => true);
+  await waitForState(page, "result", 10_000);
+  const end = await runAtEnd(page);
+  expect(end, "[control] debugRun() en el instante de run-end").not.toBeNull();
+  const collectedTypes = new Set((end?.items ?? []).filter((i) => i.kind === "item" && i.collected).map((i) => i.type));
+  const expected = (order ?? []).filter((t) => collectedTypes.has(t));
+  test.info().annotations.push({ type: "info", description: `groupOrder ${JSON.stringify(order)}; recolectados ${JSON.stringify([...collectedTypes])}; revisión ${JSON.stringify(answered.map((a) => a.id))}` });
+  expect(expected.length, "[control] se recolectó al menos un tipo").toBeGreaterThan(0);
+  expect.soft(answered.map((a) => a.id), `data-item-id de la revisión, en orden (${REVIEW_ITEM})`).toEqual(expected);
+});
 
 // ---------- C39 ----------
 
