@@ -219,3 +219,35 @@ C42 en detalle:
   - `data-item-ids` incompletos;
   - puntaje por grupo en lugar de por unidad;
   - `count` en el `answer` de `_dummy-run`.
+
+**Paso 3** (sonido, sprites en la revisión y E3b). Los criterios C44–C49 están en `contract/c44-c49-sound.spec.ts`, salvo C48(a), que es una búsqueda estática y está en `contract/c00-static.spec.ts`.
+
+- **Instrumentación** (`addInitScript`):
+  - una subclase de `AudioContext` que registra cada creación: el tiempo, `userActivation.isActive`, el largo del log y el estado;
+  - envoltorios de `resume`, `AudioScheduledSourceNode.start`, `decodeAudioData` y `HTMLMediaElement.play`;
+  - un observador que, en cada cambio de `data-state`, anota si el botón `mute` existe y está visible.
+- **Autoplay:** Chromium corre con `--autoplay-policy=user-gesture-required`, solo en el worker de ese archivo.
+- **Qué juegos corren qué:**
+  - en los juegos con `meta.sounds` (`variants.ts`: `sounds`, verificado contra `meta`), C44(a, b), C45, C46, C47(b, c, d), C48(b) y C49;
+  - en los juegos sin sonido, C44(c) (0 contextos);
+  - C47(a) corre en todos: en clean-channels, el botón está visible en los 5 estados; en los demás, no existe.
+- **Lecturas acordadas:**
+  - `[control]` de C44(a): el chunk con Phaser se pidió antes de contar 2 s sin contextos;
+  - "`running` en `ready`": el estado del contexto se lee con un gancho sobre el `push` del log;
+  - ≤ 500 ms para suspender y para volver a `running`;
+  - C46: test propio de 20 ciclos, que alterna los cinco juegos;
+  - C47(d) es un `[control]`: si falla, cuenta como falla, con diagnóstico. Los choques se cuentan con `debugMotion()` en `run-end`;
+  - botón "Silenciar" (texto confirmado por el usuario): el nombre no cambia al alternar; el estado va en `aria-pressed`;
+  - C49 (sprites, pedido del usuario): con los archivos servidos, cada grupo muestra un `review-sprite` con `src` = `assetBase + "trash-<tipo>.webp"`. Con ese archivo en 404, el grupo queda sin `img`, el nombre se ve y la clasificación se completa.
+- **Validación (15/10/2026):** contra el doble de clean-channels con sonido, la versión correcta pasa los 18 tests de clean-channels, y C44(c) y C47(a) pasan en los cuatro juegos sin sonido. Los 15 defectos inyectados se detectan todos:
+  - contexto creado al cargar o dos por clic;
+  - contexto en un juego sin sonido;
+  - sin suspender en la revisión;
+  - sin cerrar;
+  - botón oculto en `loading` o presente en un juego sin sonido;
+  - silencio que remonta el canvas;
+  - silencio que igual suena;
+  - sin sonido con `reducedMotion`;
+  - `HTMLMediaElement.play` y pedido de un `.mp3`;
+  - sin sprite, sprite fuera de `assetBase`;
+  - nombre oculto con el sprite en 404.

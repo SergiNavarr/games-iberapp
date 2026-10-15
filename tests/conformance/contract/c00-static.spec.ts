@@ -75,6 +75,11 @@ test('C20(a) · rg "tweens\\.add|cameras\\.main\\.(shake|flash|fade|pan|zoomTo)"
   expect(VARIANT_DIRS.flatMap((d) => grepDir(d, /tweens\.add|cameras\.main\.(shake|flash|fade|pan|zoomTo)/))).toEqual([]);
 });
 
+test('C48(a) · rg "new Audio\\(|HTMLAudioElement|decodeAudioData|\\.(mp3|ogg|wav|m4a|aac)\\b" en lib/games/ y components/games/ → 0', () => {
+  const pattern = /new Audio\(|HTMLAudioElement|decodeAudioData|\.(mp3|ogg|wav|m4a|aac)\b/;
+  expect([...grepDir("lib/games", pattern), ...grepDir("components/games", pattern)]).toEqual([]);
+});
+
 test('E2 · genérico: rg -i "water-signs" en components/games/GameStage.tsx y lib/games/shared/ → 0', () => {
   const pattern = /water-signs/i;
   expect([...grepFiles(["components/games/GameStage.tsx"], pattern), ...grepDir(SHARED_DIR, pattern)]).toEqual([]);

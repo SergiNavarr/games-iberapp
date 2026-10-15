@@ -17,6 +17,8 @@
 //  stillWithoutInput: copy of meta.stillWithoutInput (E2): no motion of its own, so the [control] of C08b/C08c uses
 //    input. The tests read the declaration from meta and check this copy matches it.
 //  c19Viewports: widths where C19 runs (clean-channels and _dummy-scene: both designs, agreed for G1 and E2).
+//  sounds: copy of meta.sounds (G1b E3b): C44–C47 with an AudioContext run on it; the games without it check that no
+//    context nor mute button exists. The tests check this copy matches meta.
 export type Variant = {
   id: string;
   dir: string;
@@ -30,6 +32,7 @@ export type Variant = {
   hasBuildRun?: boolean;
   ambientMotion?: boolean;
   stillWithoutInput?: boolean;
+  sounds?: boolean;
   c19Viewports?: { width: number; height: number }[];
 };
 
@@ -48,6 +51,7 @@ export const CLEAN_VARIANT: Variant = {
   botScale: 3,
   hasBuildRun: true,
   ambientMotion: true,
+  sounds: true,
   c19Viewports: BOTH_DESIGNS,
 };
 export const SCENE_VARIANT: Variant = {
