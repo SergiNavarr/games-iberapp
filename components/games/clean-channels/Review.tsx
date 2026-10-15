@@ -4,10 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import type { ReviewProps } from "@/lib/games/contract";
 import { BINS, WASTE, type BinId, type WasteId } from "@/lib/games/clean-channels/meta";
 
-// Phase 3 of clean-channels (specification): one collected piece at a time, four bins, immediate feedback that
-// explains why. A right answer adds the piece's points; a wrong one adds nothing, never subtracts, and still shows the
-// explanation. Loaded by GameStage after onRunEnd (its own chunk, no Phaser). Test interface shared by every review
-// (E1): review-item (data-item-id = debugRun().items[].id), review-option-<bin>, review-feedback, review-next.
+// Phase 3 of clean-channels (specification, G1b): one group per waste type collected, four bins, immediate feedback
+// that explains why, once per group. The groups follow the run's seeded order (buildRun().groupOrder). A right answer
+// adds the type's points for every unit of the group; a wrong one adds nothing, never subtracts, and still shows the
+// explanation. The result counts units: total = pieces collected, hits = pieces in groups classified right. A group of
+// one looks exactly as before. Loaded by GameStage after onRunEnd (its own chunk, no Phaser). Test interface (E1, per
+// group in G1b): review-item (data-item-id = waste type, data-count, data-item-ids = debugRun().items ids),
+// review-option-<bin>, review-feedback, review-next.
 
 interface Collected {
   id: string;
@@ -16,50 +19,80 @@ interface Collected {
   points: number;
 }
 
-const collectedOf = (summary: unknown): Collected[] =>
-  summary && typeof summary === "object" && Array.isArray((summary as { collected?: unknown }).collected) ? (summary as { collected: Collected[] }).collected : [];
+interface Group {
+  type: WasteId;
+  bin: BinId;
+  points: number;
+  /** debugRun().items ids of the group's units, in the order they were collected. */
+  ids: string[];
+}
+
+/** The collected units grouped by type, in the run's group order (types missing from it, if any, go last). */
+function groupsOf(summary: unknown): Group[] {
+  const s = (summary ?? {}) as { collected?: unknown; groupOrder?: unknown };
+  const collected = Array.isArray(s.collected) ? (s.collected as Collected[]) : [];
+  const order = Array.isArray(s.groupOrder) ? (s.groupOrder as WasteId[]) : [];
+  const byType = new Map<WasteId, Group>();
+  for (const unit of collected) {
+    const group = byType.get(unit.type) ?? { type: unit.type, bin: unit.bin, points: unit.points, ids: [] };
+    group.ids.push(unit.id);
+    byType.set(unit.type, group);
+  }
+  const rank = (type: WasteId) => (order.includes(type) ? order.indexOf(type) : order.length);
+  return [...byType.values()].sort((a, b) => rank(a.type) - rank(b.type));
+}
 
 const binLabel = (id: BinId) => BINS.find((b) => b.id === id)?.label ?? id;
 
 export function Review({ summary, onAnswer, onDone }: ReviewProps) {
-  const [items] = useState(() => collectedOf(summary));
+  const [groups] = useState(() => groupsOf(summary));
   const [index, setIndex] = useState(0);
   const [answer, setAnswer] = useState<BinId | null>(null);
   const tally = useRef({ hits: 0, score: 0 });
   const next = useRef<HTMLButtonElement>(null);
+  const units = groups.reduce((sum, g) => sum + g.ids.length, 0);
 
   // Nothing collected: the classification is skipped (specification); GameStage shows meta.emptyResult.
   useEffect(() => {
-    if (items.length === 0) onDone({ completed: true, hits: 0, total: 0, score: 0 });
-  }, [items, onDone]);
+    if (groups.length === 0) onDone({ completed: true, hits: 0, total: 0, score: 0 });
+  }, [groups, onDone]);
 
   useEffect(() => {
     if (answer !== null) next.current?.focus();
   }, [answer]);
 
-  if (items.length === 0) return null;
-  const item = items[index];
-  const info = WASTE[item.type];
-  const last = index === items.length - 1;
+  if (groups.length === 0) return null;
+  const group = groups[index];
+  const info = WASTE[group.type];
+  const count = group.ids.length;
+  const many = count > 1;
+  const last = index === groups.length - 1;
   const hit = answer === info.bin;
+  const title = many ? `${info.name} ×${count}` : info.name;
 
   const choose = (bin: BinId) => {
     if (answer !== null) return;
     const right = bin === info.bin;
     if (right) {
-      tally.current.hits += 1;
-      tally.current.score += info.points;
+      tally.current.hits += count;
+      tally.current.score += info.points * count;
     }
     setAnswer(bin);
+    const where = binLabel(info.bin);
     onAnswer({
       hit: right,
-      announcement: right ? `Correcto: ${info.name} va en ${binLabel(info.bin)}. Suma ${info.points} puntos.` : `No: ${info.name} va en ${binLabel(info.bin)}.`,
+      count,
+      announcement: right
+        ? many
+          ? `Correcto: ${title} van en ${where}. Suman ${info.points * count} puntos.`
+          : `Correcto: ${info.name} va en ${where}. Suma ${info.points} puntos.`
+        : `No: ${title} ${many ? "van" : "va"} en ${where}.`,
     });
   };
 
   const advance = () => {
     if (last) {
-      onDone({ completed: true, hits: tally.current.hits, total: items.length, score: tally.current.score });
+      onDone({ completed: true, hits: tally.current.hits, total: units, score: tally.current.score });
       return;
     }
     setIndex(index + 1);
@@ -69,11 +102,11 @@ export function Review({ summary, onAnswer, onDone }: ReviewProps) {
   return (
     <div className="flex flex-col items-start gap-5">
       <span className="eyebrow text-mute">
-        Clasificación · {index + 1} de {items.length}
+        Clasificación · {index + 1} de {groups.length}
       </span>
-      <div data-testid="review-item" data-item-id={item.id} className="flex flex-col gap-1">
-        <h4 className="title-display m-0 text-[clamp(24px,3vw,34px)] leading-none text-head">{info.name}</h4>
-        <p className="m-0 text-[17px] leading-snug text-mute">¿En qué contenedor va?</p>
+      <div data-testid="review-item" data-item-id={group.type} data-count={count} data-item-ids={group.ids.join(" ")} className="flex flex-col gap-1">
+        <h4 className="title-display m-0 text-[clamp(24px,3vw,34px)] leading-none text-head">{title}</h4>
+        <p className="m-0 text-[17px] leading-snug text-mute">{many ? "¿En qué contenedor van?" : "¿En qué contenedor va?"}</p>
       </div>
       <div className="grid w-full max-w-[640px] grid-cols-2 gap-3">
         {BINS.map((bin) => {
@@ -99,7 +132,7 @@ export function Review({ summary, onAnswer, onDone }: ReviewProps) {
       {answer !== null && (
         <>
           <p data-testid="review-feedback" className="m-0 max-w-[60ch] text-[17px] leading-snug">
-            <strong className={hit ? "text-mint" : "text-orange"}>{hit ? `¡Bien! +${info.points} puntos.` : `Va en ${binLabel(info.bin)}.`}</strong> {hit ? info.correct : info.wrong}
+            <strong className={hit ? "text-mint" : "text-orange"}>{hit ? `¡Bien! +${info.points * count} puntos.` : `${many ? "Van" : "Va"} en ${binLabel(info.bin)}.`}</strong> {hit ? info.correct : info.wrong}
           </p>
           <button
             ref={next}

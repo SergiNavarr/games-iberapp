@@ -4,8 +4,10 @@
 // loaded by file path at run time, never imported statically, so a renamed export can never break the coder's `tsc`
 // or `next build` (C01). JUDGE_MODULES_ROOT overrides where they are read from (only to validate the suite against a
 // test double; the verdict always uses the repo).
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { test as base, type Page } from "@playwright/test";
 import { ALL_VARIANTS, CLEAN_VARIANT, DUMMY_VARIANT, ONCE_VARIANT, RUN_VARIANT, SCENE_VARIANT, WATER_VARIANT, type Variant } from "./variants";
@@ -68,6 +70,8 @@ export type DebugRun = {
   kinematics: { playerSpeed: number; pickupHalfWidth: number; visibleMs: number };
   items: DebugRunItem[];
   spawns: { id: string; kind: string; x: number; t: number }[];
+  /** G1b E3a: order of the review groups (games that group the review by type). */
+  groupOrder?: string[];
 };
 export type DebugMotion = { active: number; created: number; flashes: number[]; shakes: number[]; staticFeedback: number[]; collisions: number[] };
 /** E2 scene hook: scene px; cssX = view.left + x * view.scale (relative to the mount container, like debugTargets()). */
@@ -307,11 +311,43 @@ export async function completeWithKeyboard(page: Page, stageSelector = STAGE, se
 
 export type InputMode = "keyboard" | "mouse" | "touch";
 
-/** id → correct answer, from debugRun().items (the planned schedule). Must be read while the game is alive (playing). */
+/**
+ * id → correct answer, from debugRun().items (the planned schedule), plus type → answer for games whose review groups
+ * the items by type (G1b E3a: review-item data-item-id = the type). Must be read while the game is alive (playing).
+ */
 export async function captureAnswers(page: Page, which: "stage" | "raw" = "stage"): Promise<Record<string, string>> {
   const run = await debugRun(page, which);
   if (!run) throw new Error("debugRun() devolvió null mientras se jugaba");
-  return Object.fromEntries(run.items.filter((i) => i.kind === "item" && i.answer).map((i) => [i.id, i.answer as string]));
+  const items = run.items.filter((i) => i.kind === "item" && i.answer);
+  return { ...Object.fromEntries(items.map((i) => [i.type, i.answer as string])), ...Object.fromEntries(items.map((i) => [i.id, i.answer as string])) };
+}
+
+/**
+ * G1b E3a: keeps a copy of debugRun() taken at the instant the wrapper logs `run-end` (the log push happens before the
+ * wrapper destroys the canvas), so the review can be checked against the final state of the run. Call after the
+ * bench loaded, before the run ends; read it with runAtEnd().
+ */
+export async function hookRunEndSnapshot(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as ConformanceWindow & { __judgeRunAtEnd?: unknown };
+    const c = w.__conformance;
+    const log = c.log as LogEntry[] & { __judgeHooked?: boolean };
+    if (log.__judgeHooked) return;
+    const push = log.push.bind(log);
+    log.push = (...entries: LogEntry[]) => {
+      for (const e of entries)
+        if (e.event === "run-end" && e.source !== "raw") {
+          const run = c.handle()?.debugRun?.();
+          if (run) w.__judgeRunAtEnd = JSON.parse(JSON.stringify(run));
+        }
+      return push(...entries);
+    };
+    log.__judgeHooked = true;
+  });
+}
+
+export function runAtEnd(page: Page): Promise<DebugRun | null> {
+  return page.evaluate(() => ((window as unknown as { __judgeRunAtEnd?: DebugRun }).__judgeRunAtEnd ?? null) as DebugRun | null);
 }
 
 type SteerFrame = {
@@ -438,7 +474,17 @@ async function activate(page: Page, selector: string, mode: InputMode) {
   else await el.click();
 }
 
-export type ReviewAnswer = { id: string; chose: string; correct: string; wantCorrect: boolean; logFrom: number; logTo: number };
+/** count / itemIds: the review-item's data-count and data-item-ids (G1b E3a, grouped review); null when absent. */
+export type ReviewAnswer = {
+  id: string;
+  chose: string;
+  correct: string;
+  wantCorrect: boolean;
+  logFrom: number;
+  logTo: number;
+  count: number | null;
+  itemIds: string[] | null;
+};
 
 /**
  * Answers the review one item at a time until `result`. choose(i) decides whether item i gets the correct option or a
@@ -456,6 +502,8 @@ export async function answerReview(page: Page, answers: Record<string, string>, 
     const item = page.locator(REVIEW_ITEM).first();
     await item.waitFor({ state: "visible", timeout: 10_000 });
     const id = (await item.getAttribute("data-item-id")) ?? "";
+    const countAttr = await item.getAttribute("data-count");
+    const idsAttr = await item.getAttribute("data-item-ids");
     const options = await page
       .locator(`[data-testid^="${REVIEW_OPTION_PREFIX}"]`)
       .evaluateAll((els, prefix) => els.map((e) => (e.getAttribute("data-testid") ?? "").slice(prefix.length)), REVIEW_OPTION_PREFIX);
@@ -468,7 +516,16 @@ export async function answerReview(page: Page, answers: Record<string, string>, 
     await page.locator(REVIEW_FEEDBACK).first().waitFor({ state: "visible", timeout: 5_000 });
     await page.waitForTimeout(100);
     const logTo = await logLength(page);
-    done.push({ id, chose, correct, wantCorrect, logFrom, logTo });
+    done.push({
+      id,
+      chose,
+      correct,
+      wantCorrect,
+      logFrom,
+      logTo,
+      count: countAttr === null ? null : Number(countAttr),
+      itemIds: idsAttr === null ? null : idsAttr.split(/\s+/).filter(Boolean),
+    });
     await activate(page, REVIEW_NEXT, mode);
     await page.waitForFunction(
       ([root, itemSel, prev]) =>
@@ -695,6 +752,7 @@ export async function loadDummyMeta(): Promise<GameMeta> {
 }
 
 export type BuiltRun = {
+  groupOrder?: string[];
   difficulty: string;
   layout: "landscape" | "portrait";
   durationMs: number;
@@ -748,6 +806,31 @@ export function loadSceneData(variant: Variant): SceneData {
     QUESTION: question,
     scoreOf: raw.scoreOf as SceneData["scoreOf"],
   };
+}
+
+/**
+ * buildRun of a game as it was at commit `ref` (G1b E3a: C38 compares the schedule with 8af40ef). The commit's `lib/`
+ * and `tsconfig.json` are extracted with `git archive` to a folder outside the repo (with a junction to node_modules),
+ * so its `@/` imports resolve with its own tsconfig. JUDGE_FROZEN_BUILD_RUN overrides it with a module path (only to
+ * validate the suite against a test double).
+ */
+export function loadFrozenBuildRun(variant: Variant, ref: string): BuildRun {
+  const override = process.env.JUDGE_FROZEN_BUILD_RUN;
+  if (override) return (createRequire(__filename)(override) as { buildRun: BuildRun }).buildRun;
+  const out = path.join(os.tmpdir(), `iberapp-judge-${ref}`);
+  const file = path.join(out, variant.dir, "data.ts");
+  if (!fs.existsSync(file)) {
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    execFileSync("git", ["archive", "--format=tar", "-o", path.join(out, "src.tar"), ref, "lib", "tsconfig.json"], { cwd: MODULES_ROOT });
+    // Relative name with cwd = out: GNU tar (Git Bash) would read "C:\…" as a remote host.
+    execFileSync("tar", ["-xf", "src.tar"], { cwd: out });
+    fs.rmSync(path.join(out, "src.tar"));
+    fs.symlinkSync(path.join(MODULES_ROOT, "node_modules"), path.join(out, "node_modules"), "junction");
+  }
+  const { buildRun } = createRequire(__filename)(file) as { buildRun?: BuildRun };
+  if (typeof buildRun !== "function") throw new Error(`${variant.dir}/data.ts de ${ref} no exporta buildRun`);
+  return buildRun;
 }
 
 /** First seed in [1, max] whose buildRun satisfies `ok`, or null. */

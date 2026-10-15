@@ -31,6 +31,9 @@ const hitsWithinTotal = (r: { hits: number; total: number }) => r.hits <= r.tota
 export const gameResultSchema = z.object(resultShape).refine(hitsWithinTotal, { message: "hits > total" });
 export type GameResult = z.infer<typeof gameResultSchema>;
 
+/** ReviewProps.onAnswer `count` (E3a): units decided by one answer. */
+export const answerCountSchema = z.number().int().min(1);
+
 /** One entry of localStorage["ibera-games-progress"], keyed by game id (P1). */
 export const progressEntrySchema = z.object({ ...resultShape, savedAt: z.iso.datetime() }).refine(hitsWithinTotal, { message: "hits > total" });
 export type ProgressEntry = z.infer<typeof progressEntrySchema>;
@@ -184,6 +187,8 @@ export interface DebugRun {
   items: DebugRunItem[];
   /** Fixed-step simulation: identical at any timeScale for the same seed and difficulty. */
   spawns: DebugRunSpawn[];
+  /** Games whose review groups the run's objects: the order of the groups (e.g. waste types). */
+  groupOrder?: string[];
 }
 
 /** Non-essential motion created through shared/motion (testHooks). Times in game ms. */
@@ -251,8 +256,11 @@ export interface ReviewProps {
   summary: unknown;
   meta: GameMeta;
   difficulty?: string;
-  /** Once per reviewed object. The wrapper announces the text and, on a hit, reports progress. */
-  onAnswer: (answer: { hit: boolean; announcement: string }) => void;
+  /**
+   * Once per reviewed object, or per group of objects (E3a). The wrapper announces the text and, on a hit, adds
+   * `count` hits (default 1, an integer ≥ 1: the units that answer decides) and reports progress once.
+   */
+  onAnswer: (answer: { hit: boolean; announcement: string; count?: number }) => void;
   /** At most once: the final result. The wrapper validates it, saves it and shows the result screen. */
   onDone: (result: GameResult) => void;
 }

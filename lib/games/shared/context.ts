@@ -16,7 +16,7 @@ export interface SceneTarget {
 }
 
 /** What a run scene reports for handle.debugRun(); the runtime adds difficulty, layout, timeScale and elapsedMs. */
-export type SceneRun = Pick<DebugRun, "durationMs" | "ended" | "player" | "kinematics" | "items" | "spawns">;
+export type SceneRun = Pick<DebugRun, "durationMs" | "ended" | "player" | "kinematics" | "items" | "spawns" | "groupOrder">;
 
 /**
  * What a fixed-scene game reports for handle.debugScene() (E2): scene px, plus the scene size and where the scene

@@ -194,3 +194,28 @@ C42 en detalle:
   - si el diff toca solo `lib/games/clean-channels/` y `public/games/clean-channels/`: los criterios de clean-channels, C22, las búsquedas estáticas y C01;
   - si toca configuración, `package.json`, el lockfile, `.gitignore` o `scripts/`: la suite completa.
 - **Validación (14/10/2026):** contra el doble de clean-channels, la versión correcta pasa. Los tres defectos inyectados se detectan: sin efecto ambiental, pala que se mueve con `reducedMotion` y nombre viejo.
+
+**Paso 2** (clasificación agrupada y E3a: `onAnswer` con `count`), con lo acordado con el coordinador. Toca el wrapper, así que corre la suite completa de todos los juegos.
+
+- **C26 por grupo** (`contract/c26-c32-contract.spec.ts`):
+  - `answer.count` = `data-count`; un acierto da 1 `progress` con `hits + n` y un error, 0.
+  - `data-item-ids` = los ítems recolectados de ese tipo, según `debugRun()` en el instante de `run-end`. Ese instante lo captura `hookRunEndSnapshot` cuando el wrapper registra `run-end`, antes de destruir el canvas.
+  - La suma de los `data-count` = las unidades recolectadas.
+  - `result` = `{ completed: true, total, hits: Σ n acertados, score: Σ puntos(tipo) × n }`, con la tabla de `contract/spec-clean-channels.ts`.
+  - En `_dummy-run`, el payload de `answer` tiene exactamente `hit`, `hits` y `total`.
+- **C38** (`contract/c37-c39-game.spec.ts`):
+  - en Node, `buildRun` sin `groupOrder` es igual al de `8af40ef` (lo carga `loadFrozenBuildRun` con `git archive`) en las 200 semillas × 3 × 2;
+  - `groupOrder` es una permutación de los 7 tipos, con ≥ 2 órdenes distintos;
+  - en el navegador, paridad de `groupOrder` y el orden de la revisión = `groupOrder` filtrado a los tipos recolectados.
+- **Helpers:** `captureAnswers` mapea también tipo → contenedor, y `answerReview` registra `data-count` y `data-item-ids`.
+- **C39:** sin cambios; se re-verifica explícitamente.
+- **Validación (14/10/2026):** contra el doble con revisión agrupada, la versión correcta pasa los 100 tests de clean-channels y el C26 de `_dummy-run`. Los 9 defectos inyectados se detectan todos:
+  - cronograma cambiado;
+  - orden de grupos fijo;
+  - orden sin un tipo;
+  - revisión en otro orden;
+  - `progress` + 1 en lugar de + n;
+  - `answer` sin `count`;
+  - `data-item-ids` incompletos;
+  - puntaje por grupo en lugar de por unidad;
+  - `count` en el `answer` de `_dummy-run`.
