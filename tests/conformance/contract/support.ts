@@ -339,6 +339,8 @@ export async function hookRunEndSnapshot(page: Page) {
         if (e.event === "run-end" && e.source !== "raw") {
           const run = c.handle()?.debugRun?.();
           if (run) w.__judgeRunAtEnd = JSON.parse(JSON.stringify(run));
+          const motion = c.handle()?.debugMotion?.();
+          if (motion) (w as unknown as { __judgeMotionAtEnd?: unknown }).__judgeMotionAtEnd = JSON.parse(JSON.stringify(motion));
         }
       return push(...entries);
     };
@@ -348,6 +350,11 @@ export async function hookRunEndSnapshot(page: Page) {
 
 export function runAtEnd(page: Page): Promise<DebugRun | null> {
   return page.evaluate(() => ((window as unknown as { __judgeRunAtEnd?: DebugRun }).__judgeRunAtEnd ?? null) as DebugRun | null);
+}
+
+/** debugMotion() at the instant of run-end (hookRunEndSnapshot): C47 d counts the collisions with it. */
+export function motionAtEnd(page: Page): Promise<DebugMotion | null> {
+  return page.evaluate(() => ((window as unknown as { __judgeMotionAtEnd?: DebugMotion }).__judgeMotionAtEnd ?? null) as DebugMotion | null);
 }
 
 type SteerFrame = {
@@ -490,7 +497,14 @@ export type ReviewAnswer = {
  * Answers the review one item at a time until `result`. choose(i) decides whether item i gets the correct option or a
  * wrong one. Returns what was answered, with the log segment [logFrom, logTo) of each answer (C26).
  */
-export async function answerReview(page: Page, answers: Record<string, string>, mode: InputMode = "keyboard", choose: (i: number) => boolean = () => true) {
+export async function answerReview(
+  page: Page,
+  answers: Record<string, string>,
+  mode: InputMode = "keyboard",
+  choose: (i: number) => boolean = () => true,
+  /** Runs with each item's data-item-id before it is answered (C49 checks the group's sprite there). */
+  beforeAnswer?: (id: string) => Promise<void>,
+) {
   const done: ReviewAnswer[] = [];
   for (let i = 0; i < 60; i++) {
     const state = await wrapperState(page);
@@ -509,6 +523,7 @@ export async function answerReview(page: Page, answers: Record<string, string>, 
       .evaluateAll((els, prefix) => els.map((e) => (e.getAttribute("data-testid") ?? "").slice(prefix.length)), REVIEW_OPTION_PREFIX);
     const correct = answers[id];
     if (!correct) throw new Error(`review-item data-item-id="${id}" no está en debugRun().items`);
+    if (beforeAnswer) await beforeAnswer(id);
     const wantCorrect = choose(done.length);
     const chose = wantCorrect ? correct : options.find((o) => o !== correct) ?? correct;
     const logFrom = await logLength(page);
@@ -733,6 +748,8 @@ export type GameMeta = {
   textPanel?: boolean;
   counterLabel?: string;
   stillWithoutInput?: boolean;
+  // G1b E3b.
+  sounds?: boolean;
 };
 export type DummyMeta = GameMeta;
 export type ProgressEntry = { completed: boolean; hits: number; total: number; score: number; savedAt: string };
